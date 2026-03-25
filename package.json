@@ -11,6 +11,7 @@
     "get-shit-done",
     "agents",
     "hooks/dist",
+    "keel",
     "scripts"
   ],
   "keywords": [
