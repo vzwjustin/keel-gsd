@@ -115,9 +115,9 @@ process.stdin.on('end', () => {
 
       if (fs.existsSync(heartbeatFile)) {
         const heartbeat = fs.readFileSync(heartbeatFile, 'utf8');
-        const aliveMatch = heartbeat.match(/running:\s*(true|false)/);
-        const tsMatch = heartbeat.match(/last_beat_at:\s*['"]?([^'"\n]+)/);
-        const alive = aliveMatch && aliveMatch[1] === 'true';
+        const aliveMatch = heartbeat.match(/running:\s*(true|false)/) || heartbeat.match(/status:\s*(\w+)/);
+        const tsMatch = heartbeat.match(/last_beat_at:\s*['"]?([^'"\n]+)/) || heartbeat.match(/updated_at:\s*['"]?([^'"\n]+)/);
+        const alive = aliveMatch && (aliveMatch[1] === 'true' || ['ok', 'warning', 'clean'].includes(aliveMatch[1]));
 
         let stale = false;
         if (tsMatch) {
