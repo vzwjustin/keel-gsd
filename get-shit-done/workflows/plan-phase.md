@@ -722,7 +722,8 @@ If `TEXT_MODE` is true, present as a plain-text numbered list (options already s
 After plans are finalized, sync to KEEL so it can generate drift-aware monitoring rules:
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel plan 2>/dev/null
 fi
 ```

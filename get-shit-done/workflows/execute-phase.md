@@ -163,18 +163,27 @@ node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state begin-phase --phase "
 ```
 This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
 
-**KEEL guardrail (fire-and-forget):**
+**KEEL guardrail (fire-and-forget, gated by `keel_installed` from GSD_Init):**
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+# Gate on keel_installed from init JSON — single field check, no inline binary detection.
+# keel companion start is idempotent — no need to check status first.
+if [ "$keel_installed" = "true" ]; then
+  keel companion start 2>/dev/null
   keel checkpoint 2>/dev/null
 fi
 ```
 
 ```bash
-# Surface KEEL state awareness if available
+# Surface KEEL state awareness if available (freshness gate: 60s)
 if [ "$keel_installed" = "true" ]; then
-  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  KEEL_STATUS=$(node -e "
+    const fs=require('fs');
+    try {
+      const c=fs.readFileSync('.planning/KEEL-STATUS.md','utf8');
+      const m=c.match(/^Last updated:\\s*(.+)$/m);
+      if(m && (Date.now()-new Date(m[1]).getTime())<=60000) process.stdout.write(c);
+    } catch {}
+  " 2>/dev/null)
   if [ -n "$KEEL_STATUS" ]; then
     echo "--- KEEL Status ---"
     echo "$KEEL_STATUS"
@@ -602,8 +611,9 @@ Use AskUserQuestion to present the options.
 
 <step name="keel_pre_verify_drift">
 **KEEL guardrail — drift check before verification (fire-and-forget):**
+Gate on `keel_installed` from GSD_Init — skip silently when false (Req 10.1, 10.4).
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+if [ "$keel_installed" = "true" ]; then
   keel drift 2>/dev/null
 fi
 ```
@@ -783,8 +793,9 @@ node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(phase-{X}): ev
 
 <step name="keel_phase_close">
 **KEEL guardrail (fire-and-forget):**
+Gate on `keel_installed` from GSD_Init — skip silently when false (Req 10.1, 10.4).
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+if [ "$keel_installed" = "true" ]; then
   keel checkpoint 2>/dev/null
 fi
 ```

@@ -40,9 +40,23 @@ Parse JSON output:
 <step name="keel_status_check">
 **Surface KEEL state awareness if available:**
 
+Skip silently when keel binary is absent (Req 10.1) — reads KEEL-STATUS.md from disk, no subprocess.
+
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+# Detect keel binary presence — single check, store result (Req 10.3, 10.6).
+keel_installed="false"
+if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
+
+# Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
+  KEEL_STATUS=$(node -e "
+    const fs=require('fs');
+    try {
+      const c=fs.readFileSync('.planning/KEEL-STATUS.md','utf8');
+      const m=c.match(/^Last updated:\\s*(.+)$/m);
+      if(m && (Date.now()-new Date(m[1]).getTime())<=60000) process.stdout.write(c);
+    } catch {}
+  " 2>/dev/null)
   if [ -n "$KEEL_STATUS" ]; then
     echo "--- KEEL Status ---"
     echo "$KEEL_STATUS"

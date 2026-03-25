@@ -69,6 +69,47 @@ function readYamlFile(filePath) {
   }
 }
 
+// ─── Git helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Get the current git branch name. Returns null if not in a git repo or git unavailable.
+ * @param {string} cwd
+ * @returns {string|null}
+ */
+function getCurrentBranch(cwd) {
+  try {
+    const headPath = path.join(cwd, '.git', 'HEAD');
+    const content = fs.readFileSync(headPath, 'utf8').trim();
+    if (content.startsWith('ref: refs/heads/')) {
+      return content.slice('ref: refs/heads/'.length);
+    }
+    // Detached HEAD — return the short hash
+    return content.slice(0, 12);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the HEAD commit hash. Returns null if not in a git repo.
+ * @param {string} cwd
+ * @returns {string|null}
+ */
+function getHeadCommitHash(cwd) {
+  try {
+    const headPath = path.join(cwd, '.git', 'HEAD');
+    const content = fs.readFileSync(headPath, 'utf8').trim();
+    if (content.startsWith('ref: ')) {
+      const refPath = path.join(cwd, '.git', content.slice(5));
+      return fs.readFileSync(refPath, 'utf8').trim();
+    }
+    // Detached HEAD — content is the hash
+    return content;
+  } catch {
+    return null;
+  }
+}
+
 // ─── readAlerts ───────────────────────────────────────────────────────────────
 
 /**
@@ -334,6 +375,23 @@ function ruleConditionHolds(rule, sourceFile, cwd) {
       }
     }
 
+    case 'GIT-001': {
+      // Branch mismatch: current branch does not contain active phase identifier
+      let checkpoint = null;
+      try {
+        const { loadLatestCheckpoint } = require('./checkpoint.js');
+        if (typeof loadLatestCheckpoint === 'function') {
+          checkpoint = loadLatestCheckpoint(cwd);
+        }
+      } catch {
+        return false;
+      }
+      if (!checkpoint || !checkpoint.phase) return false;
+      const currentBranch = getCurrentBranch(cwd);
+      if (!currentBranch) return false;
+      return !currentBranch.includes(String(checkpoint.phase));
+    }
+
     default:
       return false;
   }
@@ -470,6 +528,8 @@ module.exports = {
   consolidateAlerts,
   appendAlertHistory,
   filterStaleAlerts,
+  getCurrentBranch,
+  getHeadCommitHash,
   // Exported for testing
   levenshtein,
   levenshteinRatio,

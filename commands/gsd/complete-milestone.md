@@ -67,6 +67,13 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
    - Present milestone scope and stats
    - Wait for confirmation
 
+1.5. **KEEL drift gate:**
+
+   - Skip entirely if `command -v keel` fails or `.keel/session/alerts.yaml` absent/empty
+   - Read `.keel/session/alerts.yaml`; check for `severity: high` AND `deterministic: true` alerts
+   - If found: invoke `keel done` and block milestone completion on non-zero exit
+   - Surface blocker output and resolution commands; HALT if blocked
+
 2. **Gather stats:**
 
    - Count phases, plans, tasks

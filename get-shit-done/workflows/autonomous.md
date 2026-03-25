@@ -33,8 +33,10 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+# keel companion start is idempotent — no need to check status first.
+if [ "$keel_installed" = "true" ]; then
+  keel companion start 2>/dev/null
 fi
 ```
 
@@ -244,7 +246,8 @@ Skill(skill="gsd:execute-phase", args="${PHASE_NUM} --no-transition")
 Before reading verification results, run KEEL drift check:
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel drift 2>/dev/null
 fi
 ```
@@ -632,7 +635,8 @@ Decisions captured: {count} across {area_count} areas
 After each phase completes, checkpoint KEEL state before moving to the next phase:
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel checkpoint 2>/dev/null
 fi
 ```
@@ -762,7 +766,8 @@ Cleanup shows its own dry-run and asks user for approval internally — this is 
 Checkpoint KEEL state and stop the companion at the end of the autonomous lifecycle:
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel checkpoint 2>/dev/null
   keel companion stop 2>/dev/null
 fi

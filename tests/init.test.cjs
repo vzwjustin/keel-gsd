@@ -1331,6 +1331,57 @@ describe('parseKeelStatus', () => {
   });
 });
 
+describe('parseHeartbeat', () => {
+  const { parseHeartbeat } = require('../get-shit-done/bin/lib/init.cjs');
+
+  test('returns null for empty string', () => {
+    assert.strictEqual(parseHeartbeat(''), null);
+  });
+
+  test('returns null for null input', () => {
+    assert.strictEqual(parseHeartbeat(null), null);
+  });
+
+  test('returns null for undefined input', () => {
+    assert.strictEqual(parseHeartbeat(undefined), null);
+  });
+
+  test('parses running heartbeat with all fields', () => {
+    const content = 'running: true\npid: 12345\nlast_beat_at: "2025-01-15T10:30:00.000Z"\nstarted_at: "2025-01-15T10:00:00.000Z"\nversion: "1.0.0"\n';
+    const result = parseHeartbeat(content);
+    assert.strictEqual(result.running, true);
+    assert.strictEqual(result.pid, 12345);
+    assert.strictEqual(result.last_beat_at, '2025-01-15T10:30:00.000Z');
+    assert.strictEqual(result.started_at, '2025-01-15T10:00:00.000Z');
+    assert.strictEqual(result.version, '1.0.0');
+  });
+
+  test('parses stopped heartbeat', () => {
+    const content = 'running: false\npid: 12345\nlast_beat_at: "2025-01-15T10:30:00.000Z"\n';
+    const result = parseHeartbeat(content);
+    assert.strictEqual(result.running, false);
+    assert.strictEqual(result.pid, 12345);
+  });
+
+  test('handles null values', () => {
+    const content = 'running: true\npid: null\n';
+    const result = parseHeartbeat(content);
+    assert.strictEqual(result.running, true);
+    assert.strictEqual(result.pid, null);
+  });
+
+  test('returns null for whitespace-only content', () => {
+    assert.strictEqual(parseHeartbeat('   \n  \n  '), null);
+  });
+
+  test('skips comment lines', () => {
+    const content = '# This is a comment\nrunning: true\n';
+    const result = parseHeartbeat(content);
+    assert.strictEqual(result.running, true);
+    assert.ok(!result['# This is a comment']);
+  });
+});
+
 describe('detectKeel', () => {
   const { detectKeel } = require('../get-shit-done/bin/lib/init.cjs');
   let tmpDir;
@@ -1367,7 +1418,7 @@ describe('detectKeel', () => {
     assert.strictEqual(result.keel_installed, false);
   });
 
-  test('returns keel_installed true with null status when binary present + .keel exists but no KEEL-STATUS.md', () => {
+  test('returns keel_installed true with null status when binary present + .keel exists but no heartbeat', () => {
     // Only runs when keel binary is actually installed
     let keelOnPath = false;
     try { require('child_process').execSync('which keel', { stdio: 'ignore' }); keelOnPath = true; } catch {}
@@ -1378,31 +1429,55 @@ describe('detectKeel', () => {
     assert.strictEqual(result.keel_status, null);
   });
 
-  test('returns keel_installed true with parsed status when binary present + KEEL-STATUS.md exists', () => {
+  test('returns keel_installed true with parsed heartbeat when binary present + heartbeat exists', () => {
     let keelOnPath = false;
     try { require('child_process').execSync('which keel', { stdio: 'ignore' }); keelOnPath = true; } catch {}
     if (!keelOnPath) return; // skip when binary absent
-    fs.mkdirSync(path.join(tmpDir, '.keel'), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.keel', 'session'), { recursive: true });
     fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'KEEL-STATUS.md'),
-      '## Goal\nShip v2.0\n## Phase\nPhase 3\n'
+      path.join(tmpDir, '.keel', 'session', 'companion-heartbeat.yaml'),
+      'running: true\npid: 12345\nlast_beat_at: "2025-01-15T10:30:00.000Z"\nstarted_at: "2025-01-15T10:00:00.000Z"\nversion: "1.0.0"\n'
     );
     const result = detectKeel(tmpDir);
     assert.strictEqual(result.keel_installed, true);
-    assert.strictEqual(result.keel_status.goal, 'Ship v2.0');
-    assert.strictEqual(result.keel_status.phase, 'Phase 3');
+    assert.strictEqual(result.keel_status.running, true);
+    assert.strictEqual(result.keel_status.pid, 12345);
+    assert.strictEqual(result.keel_status.last_beat_at, '2025-01-15T10:30:00.000Z');
   });
 
-  test('returns null keel_status when KEEL-STATUS.md is empty', () => {
+  test('returns null keel_status when heartbeat file is empty', () => {
     let keelOnPath = false;
     try { require('child_process').execSync('which keel', { stdio: 'ignore' }); keelOnPath = true; } catch {}
     if (!keelOnPath) return; // skip when binary absent
-    fs.mkdirSync(path.join(tmpDir, '.keel'), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'KEEL-STATUS.md'), '');
+    fs.mkdirSync(path.join(tmpDir, '.keel', 'session'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.keel', 'session', 'companion-heartbeat.yaml'), '');
     const result = detectKeel(tmpDir);
     assert.strictEqual(result.keel_installed, true);
     assert.strictEqual(result.keel_status, null);
+  });
+
+  test('returns null keel_status when heartbeat file is absent but .keel/session exists', () => {
+    let keelOnPath = false;
+    try { require('child_process').execSync('which keel', { stdio: 'ignore' }); keelOnPath = true; } catch {}
+    if (!keelOnPath) return; // skip when binary absent
+    fs.mkdirSync(path.join(tmpDir, '.keel', 'session'), { recursive: true });
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, true);
+    assert.strictEqual(result.keel_status, null);
+  });
+
+  test('returns keel_status with running false from stopped heartbeat', () => {
+    let keelOnPath = false;
+    try { require('child_process').execSync('which keel', { stdio: 'ignore' }); keelOnPath = true; } catch {}
+    if (!keelOnPath) return; // skip when binary absent
+    fs.mkdirSync(path.join(tmpDir, '.keel', 'session'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.keel', 'session', 'companion-heartbeat.yaml'),
+      'running: false\npid: 12345\nlast_beat_at: "2025-01-15T10:30:00.000Z"\n'
+    );
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, true);
+    assert.strictEqual(result.keel_status.running, false);
+    assert.strictEqual(result.keel_status.pid, 12345);
   });
 });

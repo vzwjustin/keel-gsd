@@ -32,14 +32,16 @@ Parse JSON for: `state_exists`, `roadmap_exists`, `project_exists`, `planning_ex
 
 **KEEL companion restart (fire-and-forget):**
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+# keel companion start is idempotent — no need to check status first.
+if [ "$keel_installed" = "true" ]; then
+  keel companion start 2>/dev/null
 fi
 ```
 
 **KEEL brownfield offer (if binary present but repo not initialized):**
 ```bash
-if command -v keel >/dev/null 2>&1 && [ ! -d ".keel" ]; then
+if [ "$keel_installed" = "true" ] && [ ! -d ".keel" ]; then
   # Binary present but repo not initialized — offer to add KEEL
 fi
 ```
@@ -64,8 +66,16 @@ If `.keel/` is still absent after the command, surface this advisory and continu
 
 **Surface KEEL status if available:**
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+# Gate on keel_installed from init JSON (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
+  KEEL_STATUS=$(node -e "
+    const fs=require('fs');
+    try {
+      const c=fs.readFileSync('.planning/KEEL-STATUS.md','utf8');
+      const m=c.match(/^Last updated:\\s*(.+)$/m);
+      if(m && (Date.now()-new Date(m[1]).getTime())<=60000) process.stdout.write(c);
+    } catch {}
+  " 2>/dev/null)
   if [ -n "$KEEL_STATUS" ]; then
     echo "--- KEEL Status ---"
     echo "$KEEL_STATUS"

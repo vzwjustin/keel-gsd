@@ -21,8 +21,14 @@ What's the quick fix? (one sentence)
 Store as `$TASK`.
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+# Detect keel binary presence — single check, store result (Req 10.3, 10.6).
+keel_installed="false"
+if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
+
+# Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
+# keel companion start is idempotent — no need to check status first.
+if [ "$keel_installed" = "true" ]; then
+  keel companion start 2>/dev/null
 fi
 ```
 </step>

@@ -96,6 +96,21 @@ function startDaemon(cwd) {
     cwd,
   });
 
+  // Write a preliminary heartbeat with the child PID so subsequent
+  // startDaemon calls see it and skip spawning (prevents race condition
+  // when startDaemon is called rapidly before the daemon writes its own heartbeat).
+  try {
+    writeHeartbeat(cwd, {
+      running: true,
+      pid: child.pid,
+      last_beat_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      version: '1.0.0',
+    });
+  } catch {
+    // Non-fatal: daemon will write its own heartbeat shortly
+  }
+
   // Unref so parent exits immediately
   child.unref();
 }
@@ -265,6 +280,13 @@ function runDaemonLoop(cwd) {
     last_beat_at: now,
     version: '1.0.0',
   });
+
+  // Write initial KEEL-STATUS.md before first watch cycle (Requirement 12.3)
+  try {
+    writeKeelStatus(cwd);
+  } catch {
+    // Non-fatal: .planning/ may not exist
+  }
 
   // ── File watcher ──────────────────────────────────────────────────────────
 

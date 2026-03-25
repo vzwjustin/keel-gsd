@@ -29,7 +29,14 @@ Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir
 **Surface KEEL state awareness if available:**
 ```bash
 if [ "$keel_installed" = "true" ]; then
-  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  KEEL_STATUS=$(node -e "
+    const fs=require('fs');
+    try {
+      const c=fs.readFileSync('.planning/KEEL-STATUS.md','utf8');
+      const m=c.match(/^Last updated:\\s*(.+)$/m);
+      if(m && (Date.now()-new Date(m[1]).getTime())<=60000) process.stdout.write(c);
+    } catch {}
+  " 2>/dev/null)
   if [ -n "$KEEL_STATUS" ]; then
     echo "--- KEEL Status ---"
     echo "$KEEL_STATUS"
@@ -156,9 +163,18 @@ Deviations are normal — handle via rules below.
 3. Per task:
    - **KEEL pre-task drift check (advisory):**
      ```bash
-     # KEEL pre-task drift check (advisory)
+     # KEEL pre-task drift check (advisory, freshness gate: 60s)
      if [ "$keel_installed" = "true" ]; then
-       KEEL_ALERTS=$(grep -i "alert\|drift\|blocker" .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+       KEEL_ALERTS=$(node -e "
+         const fs=require('fs');
+         try {
+           const c=fs.readFileSync('.planning/KEEL-STATUS.md','utf8');
+           const m=c.match(/^Last updated:\\s*(.+)$/m);
+           if(!m || (Date.now()-new Date(m[1]).getTime())>60000) process.exit(0);
+           const lines=c.split('\\n').filter(l=>/alert|drift|blocker/i.test(l));
+           if(lines.length) process.stdout.write(lines.join('\\n'));
+         } catch {}
+       " 2>/dev/null)
        if [ -n "$KEEL_ALERTS" ]; then
          echo "⚠️ KEEL drift advisory: $KEEL_ALERTS"
        fi
@@ -397,7 +413,8 @@ fi
 
 <step name="keel_advance">
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel advance 2>/dev/null
 fi
 ```

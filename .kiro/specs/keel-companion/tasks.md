@@ -155,6 +155,97 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
 - [x] 11. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 12. Implement Git Event Integration
+  - Add `keel git-event` command to `keel.js` command router with two subcommands: `branch-switch` and `commit`
+  - Implement `handleBranchSwitch(prevHead, newHead, isBranchSwitch, cwd)`: skip if not a branch switch; get current branch name; compare against active checkpoint phase; write GIT-001 alert on mismatch or clear GIT-001 + write clean checkpoint on match; refresh KEEL-STATUS.md
+  - Implement `handleCommit(cwd)`: if companion is running, write a new checkpoint anchored to `HEAD` commit hash; refresh KEEL-STATUS.md
+  - Add GIT-001 rule to `alerts.js` `evaluateDriftRules` — severity: medium, deterministic: false
+  - Update `keel drift` output to include branch context (branch at checkpoint vs current branch, mismatch flag)
+  - Update `keel drift --json` output to include `branch: { at_checkpoint, current, mismatch }` field
+  - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.6_
+  - _Design: Git Event Integration, Branch Switch Handling, Commit Auto-Checkpoint, Git Rule Definition, Drift Report Branch Context_
+
+  - [x] 12.1 Install git hooks during `keel install`
+    - Write `.git/hooks/post-checkout` and `.git/hooks/post-commit` scripts that invoke `keel git-event` with `|| true` to never block git
+    - Skip hook installation silently if `.git/` does not exist
+    - _Requirements: 9.7, 14.5_
+    - _Design: Git Hook Installation_
+
+  - [ ]* 12.2 Write unit tests for git event handling
+    - `handleBranchSwitch`: branch matches phase → GIT-001 cleared + checkpoint written; branch mismatches → GIT-001 alert written
+    - `handleCommit`: companion running → new checkpoint written; companion not running → no-op
+    - Git hooks: exit 0 even when keel command fails
+    - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5_
+
+- [x] 13. Enhance KEEL-STATUS.md with Drift Warning section
+  - Update `buildStatusMarkdown` in `status.js` to include a `## ⚠ Drift Warning` section when one or more `severity: high` alerts are active, listing each blocker with its resolution command
+  - _Requirements: 12.4_
+  - _Design: High-Severity Warning Section_
+
+- [x] 14. Implement drift-report.json persistence
+  - Update `cmdDrift` in `keel.js` to write the JSON output to `.keel/session/drift-report.json` in addition to stdout when `--json` flag is used
+  - _Requirements: 12.6_
+  - _Design: Drift Report JSON Persistence_
+
+- [x] 15. Checkpoint — Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 16. Implement GSD integration touchpoints
+  - [x] 16.1 Update `keel companion start` to write initial KEEL-STATUS.md
+    - When `keel companion start` succeeds and `.planning/` exists, call `writeKeelStatus(cwd)` before the first watch cycle completes
+    - _Requirements: 12.3_
+    - _Design: KEEL-STATUS.md Refresh Contract_
+
+  - [x] 16.2 Add `keel_status` field to GSD_Init context
+    - In `get-shit-done/bin/gsd-tools.cjs` (or the relevant init module), update `detectKeel` to return `keel_status` containing parsed heartbeat data (or `null` if absent) alongside `keel_installed`
+    - Ensure `keel_installed` is derived from `which keel` binary presence, not `.keel/` directory presence
+    - _Requirements: 10.3, 12.7, 15.4_
+    - _Design: GSD_Init Binary Detection, GSD_Init Context Enrichment_
+
+  - [x] 16.3 Add context freshness gate for KEEL-STATUS.md
+    - In GSD workflow context assembly, include KEEL-STATUS.md content only when the file exists and `Last updated` timestamp is within 60 seconds
+    - _Requirements: 12.2, 12.5_
+    - _Design: Context Freshness Gate_
+
+  - [ ]* 16.4 Write unit tests for GSD integration touchpoints
+    - `detectKeel`: returns `keel_installed: true` with `keel_status` when binary on PATH and heartbeat exists; returns `keel_installed: false` when binary absent
+    - Context freshness gate: includes KEEL-STATUS.md when fresh, excludes when stale or absent
+    - _Requirements: 10.3, 12.2, 12.7_
+
+- [x] 17. Wire GSD phase lifecycle hooks
+  - [x] 17.1 Add keel companion start/checkpoint to GSD phase start
+    - In the GSD `execute-phase` workflow (or phase-start hook), add gated calls: `keel companion start 2>/dev/null` then `keel checkpoint 2>/dev/null`, gated by `keel_installed` from GSD_Init
+    - Use fire-and-forget pattern; consume only exit code
+    - _Requirements: 11.1, 11.3, 11.4, 11.6, 15.1, 15.5_
+    - _Design: Phase Start Sequence, Silent Invocation Contract, Fire-and-Forget Invocation Pattern_
+
+  - [x] 17.2 Add keel done gate to GSD verify-work
+    - In the GSD `verify-work` workflow, invoke `keel done` when `keel_installed` is true; if exit code is non-zero, surface blocker output and halt phase completion; if exit 0, invoke `keel companion stop 2>/dev/null`
+    - _Requirements: 11.2, 13.1, 13.3, 13.4, 13.5_
+    - _Design: Phase End Sequence_
+
+  - [x] 17.3 Add keel drift gate to GSD complete-milestone
+    - In the GSD `complete-milestone` workflow, read `.keel/session/alerts.yaml`; if any alert has `severity: high` AND `deterministic: true`, invoke `keel done` and block milestone completion on non-zero exit
+    - Skip drift gate entirely if keel binary not on PATH or alerts.yaml absent/empty
+    - _Requirements: 13.2, 13.4, 13.5, 13.6_
+    - _Design: Milestone Completion Blocking_
+
+  - [x] 17.4 Add fallback handling for absent keel binary in GSD workflows
+    - Ensure all GSD workflow keel invocation points check `keel_installed` from GSD_Init and skip keel blocks silently when false
+    - Ensure `gsd-statusline.js` reads heartbeat directly from disk (no subprocess) and displays no KEEL indicator when binary absent
+    - _Requirements: 10.1, 10.4, 10.5, 10.6, 15.6_
+    - _Design: Fallback When Binary Is Absent, Statusline Hook Compatibility_
+
+  - [ ]* 17.5 Write unit tests for GSD phase lifecycle hooks
+    - Phase start: `keel companion start` + `keel checkpoint` called when `keel_installed` is true; skipped when false
+    - Verify-work: `keel done` blocks phase completion on non-zero exit; passes on exit 0
+    - Complete-milestone: blocked when high-severity deterministic alerts exist; passes when alerts empty
+    - Fallback: all keel blocks skipped silently when binary absent
+    - _Requirements: 11.1, 11.2, 11.5, 13.1, 13.2, 13.4_
+
+- [x] 18. Final checkpoint — Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for a faster MVP
@@ -162,3 +253,5 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
 - Property tests (P1–P7) use `fast-check`; unit tests use `node:test` + `assert`
 - `fast-check` is a dev dependency only — zero runtime deps is a hard constraint
 - Node.js ≥ 18.0.0 required for `fs.watch` recursive option and `node:test`
+- Tasks 1–11 are completed from the initial implementation pass
+- Tasks 12–18 cover Requirements 11–15 (GSD lifecycle integration, drift data feedback, command blocking, git event integration, Claude Code compatibility)

@@ -116,6 +116,7 @@ function cmdCheckpoint() {
       in_scope_files: inScopeFiles,
       in_scope_dirs: inScopeDirs,
       plan_steps: planSteps,
+      branch: alerts().getCurrentBranch(cwd),
     });
 
     // Clear cluster alerts (checkpoint clears all current alerts)
@@ -153,43 +154,81 @@ function cmdDrift(flags) {
 
     const result = checkpoint().computeDrift(cwd, cp);
 
+    // Branch context
+    const currentBranch = alerts().getCurrentBranch(cwd) || null;
+    const checkpointBranch = cp.branch || null;
+    const branchMismatch = !!(currentBranch && checkpointBranch && currentBranch !== checkpointBranch);
+
     if (flags.json) {
-      process.stdout.write(JSON.stringify({
+      const output = {
         drifted: result.drifted,
         alerts: result.alerts,
         blockers: result.blockers,
-      }) + '\n');
+        branch: {
+          at_checkpoint: checkpointBranch,
+          current: currentBranch,
+          mismatch: branchMismatch,
+        },
+      };
+      // Persist to drift-report.json (Requirement 12.6)
+      try {
+        const reportPath = path.join(cwd, '.keel', 'session', 'drift-report.json');
+        const { writeAtomic } = require('./lib/atomic.js');
+        writeAtomic(reportPath, JSON.stringify(output, null, 2) + '\n');
+      } catch { /* non-fatal */ }
+      process.stdout.write(JSON.stringify(output) + '\n');
       process.exit(result.drifted ? 1 : 0);
     }
 
     // Human report
-    if (!result.drifted) {
+    if (!result.drifted && !branchMismatch) {
       process.stdout.write('✓ clean — no drift detected\n');
+      // Still show branch context
+      if (currentBranch) {
+        process.stdout.write(`\nBranch at checkpoint: ${checkpointBranch || '(not recorded)'}\n`);
+        process.stdout.write(`Current branch:       ${currentBranch}\n`);
+        process.stdout.write(`Branch status:        ✓ matches checkpoint\n`);
+      }
       process.exit(0);
     }
 
-    process.stdout.write(`drift detected — ${result.alerts.length} finding(s)\n\n`);
+    if (result.drifted) {
+      process.stdout.write(`drift detected — ${result.alerts.length} finding(s)\n\n`);
 
-    for (const alert of result.alerts) {
-      const consolidated = alert.consolidated ? ` [${alert.child_count} consolidated]` : '';
-      process.stdout.write(`  [${alert.severity}] ${alert.rule}: ${alert.message}${consolidated}\n`);
+      for (const alert of result.alerts) {
+        const consolidated = alert.consolidated ? ` [${alert.child_count} consolidated]` : '';
+        process.stdout.write(`  [${alert.severity}] ${alert.rule}: ${alert.message}${consolidated}\n`);
 
-      // --verbose: expand consolidated alerts to show children
-      if (flags.verbose && alert.consolidated && Array.isArray(alert.child_rules)) {
-        for (const childRule of alert.child_rules) {
-          process.stdout.write(`    - ${childRule}\n`);
+        // --verbose: expand consolidated alerts to show children
+        if (flags.verbose && alert.consolidated && Array.isArray(alert.child_rules)) {
+          for (const childRule of alert.child_rules) {
+            process.stdout.write(`    - ${childRule}\n`);
+          }
         }
       }
+
+      if (result.blockers.length > 0) {
+        process.stdout.write('\nblockers:\n');
+        for (const b of result.blockers) {
+          process.stdout.write(`  • ${b.rule}: ${b.message}\n`);
+        }
+      }
+    } else {
+      process.stdout.write('✓ clean — no drift detected\n');
     }
 
-    if (result.blockers.length > 0) {
-      process.stdout.write('\nblockers:\n');
-      for (const b of result.blockers) {
-        process.stdout.write(`  • ${b.rule}: ${b.message}\n`);
+    // Branch context in human output
+    if (currentBranch) {
+      process.stdout.write(`\nBranch at checkpoint: ${checkpointBranch || '(not recorded)'}\n`);
+      process.stdout.write(`Current branch:       ${currentBranch}\n`);
+      if (branchMismatch) {
+        process.stdout.write(`Branch status:        ⚠ context mismatch — run keel checkpoint to re-anchor\n`);
+      } else {
+        process.stdout.write(`Branch status:        ✓ matches checkpoint\n`);
       }
     }
 
-    process.exit(1);
+    process.exit(result.drifted ? 1 : 0);
   } catch (err) {
     die(`drift error: ${err.message || err}`, 2);
   }
@@ -551,12 +590,165 @@ async function runInstall(flags) {
       daemon().startDaemon(cwd);
     } catch { /* non-fatal */ }
 
+    // 7. Install git hooks (post-checkout, post-commit) — Requirement 9.7, 14.5
+    installGitHooks(cwd);
+
     process.stdout.write('✓ keel installed — companion running\n');
     process.stdout.write('  Next: keel drift\n');
     process.exit(0);
   } catch (err) {
     die(`install error: ${err.message || err}`, 1);
   }
+}
+
+// ─── Git hook installation ────────────────────────────────────────────────────
+
+/**
+ * Install post-checkout and post-commit git hooks that invoke keel git-event.
+ * Skips silently if .git/ does not exist. Hooks use || true to never block git.
+ * Requirements: 9.7, 14.5
+ * @param {string} cwd
+ */
+function installGitHooks(cwd) {
+  const gitDir = path.join(cwd, '.git');
+  try {
+    const stat = fs.statSync(gitDir);
+    if (!stat.isDirectory()) return;
+  } catch {
+    // .git/ does not exist — skip silently
+    return;
+  }
+
+  const hooksDir = path.join(gitDir, 'hooks');
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+  } catch { /* already exists */ }
+
+  const postCheckout = `#!/bin/sh
+# keel git integration — post-checkout
+keel git-event branch-switch "$1" "$2" "$3" 2>/dev/null || true
+`;
+
+  const postCommit = `#!/bin/sh
+# keel git integration — post-commit
+keel git-event commit 2>/dev/null || true
+`;
+
+  const postCheckoutPath = path.join(hooksDir, 'post-checkout');
+  const postCommitPath = path.join(hooksDir, 'post-commit');
+
+  try {
+    fs.writeFileSync(postCheckoutPath, postCheckout, { mode: 0o755 });
+  } catch { /* non-fatal */ }
+
+  try {
+    fs.writeFileSync(postCommitPath, postCommit, { mode: 0o755 });
+  } catch { /* non-fatal */ }
+}
+
+// ─── keel git-event ───────────────────────────────────────────────────────────
+
+function cmdGitEvent(sub, gitArgs) {
+  try {
+    if (sub === 'branch-switch') {
+      const prevHead = gitArgs[0] || '';
+      const newHead = gitArgs[1] || '';
+      const isBranchSwitch = gitArgs[2] || '0';
+      handleBranchSwitch(prevHead, newHead, isBranchSwitch, cwd);
+    } else if (sub === 'commit') {
+      handleCommit(cwd);
+    } else {
+      die(`Unknown git-event subcommand: ${sub || '(none)'}\nUsage: keel git-event branch-switch|commit`);
+    }
+    process.exit(0);
+  } catch (err) {
+    die(`git-event error: ${err.message || err}`, 1);
+  }
+}
+
+function handleBranchSwitch(prevHead, newHead, isBranchSwitch, cwd) {
+  // Skip if not a branch switch (file checkout)
+  if (isBranchSwitch !== '1') return;
+
+  // Require .keel/ to exist
+  if (!fs.existsSync(keelDir())) return;
+
+  const currentBranch = alerts().getCurrentBranch(cwd);
+  if (!currentBranch) return;
+
+  const cp = checkpoint().loadLatestCheckpoint(cwd);
+  const activePhase = cp && cp.phase ? String(cp.phase) : null;
+
+  if (activePhase && currentBranch.includes(activePhase)) {
+    // Branch matches active phase — clean context switch
+    // Clear any existing GIT-001 alerts
+    const currentAlerts = alerts().readAlerts(cwd);
+    const gitAlerts = currentAlerts.filter(a => a.rule === 'GIT-001');
+    const remainingAlerts = currentAlerts.filter(a => a.rule !== 'GIT-001');
+
+    if (gitAlerts.length > 0) {
+      alerts().appendAlertHistory(cwd, gitAlerts, 'auto');
+      alerts().writeAlerts(cwd, remainingAlerts);
+    }
+
+    // Write a clean checkpoint for the new branch context
+    if (cp) {
+      checkpoint().writeCheckpoint(cwd, {
+        goal: cp.goal,
+        phase: cp.phase,
+        in_scope_files: cp.in_scope_files || [],
+        in_scope_dirs: cp.in_scope_dirs || [],
+        plan_steps: cp.plan_steps || [],
+        branch: currentBranch,
+      });
+    }
+  } else {
+    // Branch does not match — write GIT-001 alert
+    const currentAlerts = alerts().readAlerts(cwd);
+    // Don't duplicate GIT-001 alerts
+    const hasGitAlert = currentAlerts.some(a => a.rule === 'GIT-001');
+    if (!hasGitAlert) {
+      const newAlert = {
+        rule: 'GIT-001',
+        message: `Branch switched to '${currentBranch}' — verify this matches active phase ${activePhase || '(unknown)'}`,
+        severity: 'medium',
+        deterministic: false,
+        created_at: new Date().toISOString(),
+        source_file: null,
+        cluster_id: `git-${Date.now()}`,
+        consolidated: false,
+      };
+      currentAlerts.push(newAlert);
+      alerts().writeAlerts(cwd, currentAlerts);
+    }
+  }
+
+  // Refresh KEEL-STATUS.md
+  try { status().writeKeelStatus(cwd); } catch { /* .planning/ may not exist */ }
+}
+
+function handleCommit(cwd) {
+  // Require .keel/ to exist
+  if (!fs.existsSync(keelDir())) return;
+
+  // Only write checkpoint if companion is running
+  const s = daemon().getStatus(cwd);
+  if (!s.running || s.stale) return;
+
+  const cp = checkpoint().loadLatestCheckpoint(cwd);
+  const commitHash = alerts().getHeadCommitHash(cwd);
+
+  checkpoint().writeCheckpoint(cwd, {
+    goal: cp ? cp.goal : null,
+    phase: cp ? cp.phase : null,
+    in_scope_files: cp ? (cp.in_scope_files || []) : [],
+    in_scope_dirs: cp ? (cp.in_scope_dirs || []) : [],
+    plan_steps: cp ? (cp.plan_steps || []) : [],
+    git_commit: commitHash,
+  });
+
+  // Refresh KEEL-STATUS.md
+  try { status().writeKeelStatus(cwd); } catch { /* .planning/ may not exist */ }
 }
 
 // ─── --daemon internal flag ───────────────────────────────────────────────────
@@ -614,6 +806,11 @@ if (args.includes('--daemon')) {
       cmdInit();
     } else if (cmd === 'install') {
       runInstall(flags);
+    } else if (cmd === 'git-event') {
+      // git-event subcommands: branch-switch, commit
+      // Additional args after the subcommand are passed through
+      const gitArgs = args.slice(2);
+      cmdGitEvent(sub, gitArgs);
     } else if (!cmd) {
       process.stdout.write([
         'keel — drift detection companion',
@@ -637,6 +834,8 @@ if (args.includes('--daemon')) {
         '  install             Bootstrap .keel/ and start companion',
         '  install --link      Symlink keel onto PATH',
         '  init                Create .keel/ structure and keel.yaml',
+        '  git-event branch-switch <prev> <new> <flag>  Handle post-checkout',
+        '  git-event commit    Handle post-commit',
         '',
       ].join('\n'));
       process.exit(0);

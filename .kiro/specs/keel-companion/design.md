@@ -2,7 +2,9 @@
 
 ## Overview
 
-The keel companion is a Node.js CLI binary (`keel`) that provides real-time anti-drift guardrails for GSD-managed repositories. It runs as a background daemon process watching for scope drift — files touched outside the active plan step, goal statement drift, scope expansion — and surfaces structured alerts that GSD hooks consume to display status and inject warnings into agent context.
+Keel is the security layer of GSD. It is the enforcement wall that every GSD stage must pass through before completion — a real-time drift detection and blocking system that protects plan integrity at the process level. Where GSD orchestrates work, keel enforces that the work stays within scope.
+
+The keel companion is a Node.js CLI binary (`keel`) that implements this security layer as a background daemon process. It continuously monitors the file system for scope drift — files touched outside the active plan step, goal statement drift, scope expansion — and surfaces structured enforcement alerts that GSD hooks consume to block stage completion, display security status, and inject drift warnings into agent context. Keel's role is analogous to a security checkpoint: every GSD stage passes through keel's enforcement layer, and keel decides whether the stage is clean enough to proceed.
 
 The binary is a single entry point at `keel/bin/keel.js`, consistent with the existing Node.js toolchain (`get-shit-done/bin/gsd-tools.cjs`, `hooks/*.js`). It uses only Node.js built-ins (no npm dependencies) to keep installation friction minimal. The `keel install` command symlinks the binary onto PATH.
 
@@ -10,35 +12,37 @@ Key design decisions shaped by retro findings:
 - Alert consolidation (cluster_id + 10s window) prevents alert storms from single pivots
 - Auto-clear on condition resolution prevents stale ghost alerts (VAL-004 pattern)
 - Atomic file writes (write-to-temp + rename) prevent partial reads by statusline hooks
-- Graceful fallback: all GSD workflows check `command -v keel` before invoking
+- Graceful fallback: all GSD workflows check `command -v keel` before invoking — GSD continues to function without its security layer, but without drift protection
 
 
 ## Architecture
+
+Keel's architecture is structured as a security enforcement pipeline: file system events flow through the drift detection engine, which evaluates them against the active checkpoint (the security baseline), and produces enforcement alerts that GSD hooks consume to gate stage completion.
 
 ```mermaid
 graph TD
     CLI[keel CLI\nkeel/bin/keel.js] --> CMD[Command Router\nparseArgs + dispatch]
     CMD --> COMP[companion subcommand\nstart / stop / status]
-    CMD --> CHKPT[checkpoint command]
-    CMD --> DRIFT[drift command]
-    CMD --> DONE[done-gate command]
+    CMD --> CHKPT[checkpoint command\nset security baseline]
+    CMD --> DRIFT[drift command\nsecurity audit]
+    CMD --> DONE[done-gate command\nsecurity gate]
     CMD --> GOAL[goal command]
     CMD --> SCAN[scan command]
-    CMD --> ADVANCE[advance command]
+    CMD --> ADVANCE[advance command\nacknowledge + re-baseline]
     CMD --> INSTALL[install / init commands]
     CMD --> WATCH[watch command]
 
     COMP --> DAEMON[Daemon Fork\nchild_process.spawn detached]
     DAEMON --> WATCHER[File Watcher\nfs.watch recursive]
     DAEMON --> HEARTBEAT[Heartbeat Loop\nsetInterval 15s]
-    DAEMON --> ENGINE[Alert Engine\nevaluateDriftRules]
+    DAEMON --> ENGINE[Alert Engine\nsecurity rule evaluation]
 
     WATCHER --> ENGINE
-    ENGINE --> ALERTS[alerts.yaml\n.keel/session/]
-    ENGINE --> HISTORY[alert-history.yaml\n.keel/session/]
+    ENGINE --> ALERTS[alerts.yaml\n.keel/session/\nenforcement state]
+    ENGINE --> HISTORY[alert-history.yaml\n.keel/session/\naudit trail]
     HEARTBEAT --> HB[companion-heartbeat.yaml\n.keel/session/]
 
-    CHKPT --> STORE[Checkpoint Store\n.keel/checkpoints/]
+    CHKPT --> STORE[Checkpoint Store\n.keel/checkpoints/\nsecurity baselines]
     SCAN --> SCOPE[scope.yaml\n.keel/scope.yaml]
     GOAL --> GOALFILE[goal.yaml\n.keel/goal.yaml]
 
@@ -46,7 +50,7 @@ graph TD
     ALERTS --> GUARD[gsd-workflow-guard.js\ndrift warning injection]
     HB --> STATUSLINE
 
-    ENGINE --> STATUS[KEEL-STATUS.md\n.planning/KEEL-STATUS.md]
+    ENGINE --> STATUS[KEEL-STATUS.md\n.planning/KEEL-STATUS.md\nenforcement summary]
 ```
 
 
@@ -54,7 +58,7 @@ graph TD
 
 ### Daemon Model
 
-`keel companion start` forks a detached child process using `child_process.spawn` with `detached: true` and `stdio: 'ignore'`, then calls `child.unref()` so the parent exits immediately. The child writes its PID to the heartbeat file and enters the watch loop.
+The security layer runs as a background daemon — always watching, never blocking the developer's workflow. `keel companion start` forks a detached child process using `child_process.spawn` with `detached: true` and `stdio: 'ignore'`, then calls `child.unref()` so the parent exits immediately. The child writes its PID to the heartbeat file and enters the watch loop. This daemon is the heartbeat of keel's security enforcement: while it runs, every file change is evaluated against the active security baseline (checkpoint).
 
 ```mermaid
 sequenceDiagram
@@ -89,9 +93,11 @@ The heartbeat file doubles as the PID file. Before starting, `keel companion sta
 
 ## File System Contracts
 
+Keel's security state is persisted entirely through well-defined file contracts. These files are the interface between keel's enforcement engine and GSD's workflow hooks — they are the mechanism by which keel's security decisions propagate into GSD's execution context.
+
 ### `.keel/session/companion-heartbeat.yaml`
 
-Written atomically (temp file + `fs.renameSync`) every 15 seconds while running.
+The heartbeat is the liveness signal for the security layer. Written atomically (temp file + `fs.renameSync`) every 15 seconds while running. A stale heartbeat means the security layer is down — GSD displays `⚓ stale` and `keel done` blocks stage completion.
 
 ```yaml
 running: true
@@ -107,7 +113,7 @@ Staleness threshold: `Date.now() - new Date(last_beat_at) > 30_000ms` → compan
 
 ### `.keel/session/alerts.yaml`
 
-Written atomically after every drift rule evaluation. Empty sequence when no alerts.
+The alerts file is the primary enforcement state — it is the list of active security findings that GSD hooks read to determine whether a stage can proceed. Written atomically after every drift rule evaluation. Empty sequence when no alerts (security layer is clean).
 
 ```yaml
 - rule: SCOPE-001
@@ -148,7 +154,7 @@ Field definitions:
 
 ### `.keel/session/alert-history.yaml`
 
-Append-only log of cleared alerts. Never truncated by the companion.
+The audit trail. Append-only log of cleared alerts — every enforcement finding that was resolved is recorded here with a timestamp and reason. Never truncated by the companion. This provides a complete security audit history for the session.
 
 ```yaml
 - rule: VAL-004
@@ -162,7 +168,7 @@ Append-only log of cleared alerts. Never truncated by the companion.
 
 ### `.keel/checkpoints/<timestamp>.yaml`
 
-Written by `keel checkpoint`. Filename format: `YYYY-MM-DDTHH-MM-SS.yaml`.
+Checkpoints are the security baselines. Written by `keel checkpoint`, each checkpoint defines the enforcement boundary — the set of files, directories, goals, and plan steps that constitute "in scope." All drift detection is measured against the active checkpoint. Filename format: `YYYY-MM-DDTHH-MM-SS.yaml`.
 
 ```yaml
 created_at: "2025-01-15T10:00:00.000Z"
@@ -237,7 +243,7 @@ done_gate:
 
 ### `.planning/KEEL-STATUS.md`
 
-Written after any state-changing command. Skipped silently if `.planning/` doesn't exist.
+The human/agent-readable enforcement summary. Written after any state-changing command. This is how keel's security state is surfaced into GSD agent context — agents read this file to understand the current enforcement posture without spawning subprocesses. Skipped silently if `.planning/` doesn't exist.
 
 ```markdown
 # KEEL Status
@@ -270,7 +276,11 @@ When no alerts: `## Active Alerts\n\nNo active alerts.`
 
 ## Alert Engine
 
+The Alert Engine is the core of keel's security layer — it evaluates drift rules against the current repo state and produces enforcement alerts that determine whether GSD stages can proceed.
+
 ### Drift Rule Definitions
+
+Each rule represents a specific security invariant that keel enforces. Rules with `deterministic: true` are hard blockers — they prevent stage completion via the done-gate.
 
 | Rule ID | Trigger | Severity | Deterministic |
 |---------|---------|----------|---------------|
@@ -326,7 +336,7 @@ END
 
 ### Auto-Clear Mechanism
 
-On each watch cycle, the engine re-evaluates all active rules. For each alert currently in `alerts.yaml`:
+Keel's security layer is designed to be precise — it blocks when drift exists and unblocks the moment drift resolves. On each watch cycle, the engine re-evaluates all active rules. For each alert currently in `alerts.yaml`:
 
 1. Re-evaluate the alert's rule condition against current repo state
 2. If condition is no longer true → remove from `alerts.yaml`, append to `alert-history.yaml` with `cleared_reason: auto`
@@ -382,6 +392,8 @@ END
 
 
 ## Drift Detection
+
+Drift detection is the sensing mechanism of keel's security layer — it identifies when the repo state has deviated from the active security baseline (checkpoint).
 
 ### File Watcher Implementation
 
@@ -441,9 +453,11 @@ Writes result to `.keel/scope.yaml`.
 
 ## Done-Gate
 
+The done-gate is keel's hard enforcement boundary — the security checkpoint that every GSD stage must pass through before completion. It is the mechanism by which keel's security layer prevents scope integrity violations at GSD workflow boundaries.
+
 ### Check Evaluation Order
 
-`keel done` runs 4 checks in sequence, stopping at the first failure:
+`keel done` runs 4 security checks in sequence, stopping at the first failure:
 
 ```
 ALGORITHM doneGate()
@@ -505,18 +519,18 @@ END
 
 ### Binary Entry Point
 
-`keel/bin/keel.js` — single file, shebang `#!/usr/bin/env node`, no external dependencies.
+`keel/bin/keel.js` — single file, shebang `#!/usr/bin/env node`, no external dependencies. This is the entry point to keel's security layer — every enforcement action flows through this binary.
 
 ```
 keel/
   bin/
-    keel.js              ← entry point + command router
+    keel.js              ← entry point + command router (security layer CLI)
     lib/
-      daemon.js          ← fork/stop/status logic
-      alerts.js          ← Alert Engine (evaluate, consolidate, auto-clear)
-      checkpoint.js      ← checkpoint read/write/diff
-      scan.js            ← scope manifest generation
-      status.js          ← KEEL-STATUS.md writer
+      daemon.js          ← fork/stop/status logic (security daemon lifecycle)
+      alerts.js          ← Alert Engine (security rule evaluation, consolidation, auto-clear)
+      checkpoint.js      ← checkpoint read/write/diff (security baseline management)
+      scan.js            ← scope manifest generation (security perimeter definition)
+      status.js          ← KEEL-STATUS.md writer (enforcement summary)
       atomic.js          ← atomic file write helper (write-temp + rename)
       yaml.js            ← minimal YAML serializer/parser (no deps)
 ```
@@ -525,45 +539,51 @@ keel/
 
 | Command | Behavior | Exit codes |
 |---------|----------|------------|
-| `keel companion start` | Fork daemon if not running; idempotent if already running | 0 success, 1 no .keel/ |
-| `keel companion stop` | SIGTERM daemon, update heartbeat running:false; idempotent if not running | 0 always |
-| `keel companion status` | Print `running: true\|false` + `last_beat_at`; stale if >30s | 0 always |
-| `keel checkpoint` | Snapshot current state to `.keel/checkpoints/<ts>.yaml`; clear cluster alerts | 0 success, 1 error |
-| `keel drift` | Compare current state vs latest checkpoint; print human report | 0 clean, 1 drift found |
+| `keel companion start` | Fork security daemon if not running; idempotent if already running | 0 success, 1 no .keel/ |
+| `keel companion stop` | SIGTERM security daemon, update heartbeat running:false; idempotent if not running | 0 always |
+| `keel companion status` | Print security layer state `running: true\|false` + `last_beat_at`; stale if >30s | 0 always |
+| `keel checkpoint` | Snapshot current state as new security baseline to `.keel/checkpoints/<ts>.yaml`; clear cluster alerts | 0 success, 1 error |
+| `keel drift` | Security audit: compare current state vs latest checkpoint; print drift report | 0 clean, 1 drift found |
 | `keel drift --json` | Same but output `{drifted, alerts, blockers}` JSON | 0 clean, 1 drift found |
 | `keel drift --verbose` | Expand consolidated alerts to show children | 0 clean, 1 drift found |
-| `keel done` | Run 4-check done-gate; print result | 0 passed, 1 blocked, 2 error |
+| `keel done` | Run 4-check security gate; print result | 0 passed, 1 blocked, 2 error |
 | `keel done --json` | Same but output `{passed, reason, blockers}` JSON | 0 passed, 1 blocked |
 | `keel goal` | Read goal from ROADMAP.md / .planning/ state; write goal.yaml | 0 success, 1 error |
 | `keel scan` | Walk repo, infer scope, write scope.yaml | 0 success, 1 error |
-| `keel advance` | Mark current step complete, write checkpoint, clear step alerts | 0 success, 1 error |
-| `keel watch` | Start file watcher in foreground (non-daemon); print events to stdout | 0 on SIGINT |
-| `keel install` | Create .keel/ structure, init, scan, start companion; idempotent | 0 success, 1 error |
+| `keel advance` | Mark current step complete, write new security baseline, clear step alerts | 0 success, 1 error |
+| `keel watch` | Start security watcher in foreground (non-daemon); print events to stdout | 0 on SIGINT |
+| `keel install` | Bootstrap security layer: create .keel/ structure, init, scan, start companion; idempotent | 0 success, 1 error |
 | `keel init` | Create .keel/session/, .keel/checkpoints/, write keel.yaml | 0 success, 1 error |
 
 ### `keel install` Sequence
+
+Bootstraps the complete security layer for a GSD project:
 
 ```
 1. Check if .keel/ already exists → if yes, print advisory and exit 0
 2. Create .keel/, .keel/session/, .keel/checkpoints/
 3. Write .keel/keel.yaml with defaults
-4. Run keel scan (infer initial scope)
+4. Run keel scan (define security perimeter)
 5. Run keel goal (capture goal from ROADMAP.md if present)
-6. Run keel checkpoint (initial anchor)
-7. Run keel companion start
-8. Print confirmation: "✓ keel installed — companion running\n  Next: keel drift"
+6. Run keel checkpoint (establish initial security baseline)
+7. Run keel companion start (activate real-time enforcement)
+8. Add .keel/session/ to .gitignore
+9. Install git hooks (post-checkout, post-commit)
+10. Print confirmation: "✓ keel installed — security layer active\n  Next: keel drift"
 ```
 
 ### `keel advance` Sequence
 
+Acknowledges progress and re-establishes the security baseline:
+
 ```
-1. Load latest checkpoint
+1. Load latest checkpoint (current security baseline)
 2. Find first incomplete plan step
 3. Mark it completed: true
-4. Write updated checkpoint (new timestamp)
+4. Write updated checkpoint (new security baseline with new timestamp)
 5. Clear all alerts with cluster_id matching that step
 6. Append cleared alerts to alert-history.yaml with cleared_reason: "advance"
-7. Refresh KEEL-STATUS.md
+7. Refresh KEEL-STATUS.md (update enforcement summary)
 8. Print: "✓ Step <id> marked complete"
 ```
 
@@ -574,7 +594,11 @@ Creates a symlink at `/usr/local/bin/keel` → `<repo>/keel/bin/keel.js`. Falls 
 
 ## Components and Interfaces
 
+These modules implement the internal subsystems of keel's security layer. Each module has a focused responsibility within the enforcement pipeline.
+
 ### `daemon.js`
+
+Manages the security daemon lifecycle — starting, stopping, and querying the enforcement process.
 
 ```javascript
 // Start the companion daemon. Returns immediately after fork.
@@ -595,6 +619,8 @@ function runDaemonLoop(cwd)
 ```
 
 ### `alerts.js`
+
+The enforcement engine — evaluates security rules, consolidates alert storms, and auto-clears resolved findings.
 
 ```javascript
 // Evaluate all drift rules against current repo state.
@@ -624,6 +650,8 @@ function appendAlertHistory(cwd, clearedAlerts, clearedReason)
 
 ### `checkpoint.js`
 
+Manages security baselines — the snapshots against which all drift is measured.
+
 ```javascript
 // Write a new checkpoint snapshot.
 function writeCheckpoint(cwd, data)
@@ -640,6 +668,8 @@ function computeDrift(cwd, checkpoint)
 
 ### `atomic.js`
 
+Ensures state file integrity — prevents partial reads that could cause GSD hooks to misread the security layer's enforcement state.
+
 ```javascript
 // Write content to path atomically via temp file + rename.
 // Prevents partial reads by concurrent hook processes.
@@ -648,7 +678,7 @@ function writeAtomic(filePath, content)
 
 ### `yaml.js`
 
-Minimal YAML serializer/parser covering only the subset used by keel state files (strings, numbers, booleans, arrays of objects, nested objects). No external dependency. Follows the same pattern as the rest of the codebase which avoids npm deps in hook scripts.
+Minimal YAML serializer/parser covering only the subset used by keel's security state files (strings, numbers, booleans, arrays of objects, nested objects). No external dependency. Data integrity of the security layer's state files depends on this module's round-trip correctness.
 
 ```javascript
 function parseYaml(text)   // → JS value
@@ -658,28 +688,30 @@ function stringifyYaml(value)  // → string
 
 ## Error Handling
 
+Keel's error handling is designed around a core principle: the security layer should never break the developer's workflow. When keel can't enforce, it degrades gracefully — GSD continues without drift protection rather than blocking on keel infrastructure failures.
+
 ### Scenario: `.keel/` does not exist
 
-**Condition**: Any command invoked before `keel install`
+**Condition**: Any keel command invoked before `keel install` — security layer not bootstrapped
 **Response**: Print `keel not initialized — run: keel install` to stderr, exit 1
 **Recovery**: User runs `keel install`
 
 ### Scenario: Companion crashes mid-session
 
-**Condition**: Daemon process dies; heartbeat becomes stale (>30s)
-**Response**: `gsd-statusline.js` displays `⚓ stale` in dim; no automatic restart
+**Condition**: Security daemon dies; heartbeat becomes stale (>30s) — enforcement layer is down
+**Response**: `gsd-statusline.js` displays `⚓ stale` in dim; `keel done` blocks stage completion with a stale-companion blocker; no automatic restart
 **Recovery**: User runs `keel companion stop && keel companion start`
 
 ### Scenario: Heartbeat file partially written
 
-**Condition**: Race between daemon write and hook read
-**Response**: Atomic write (temp + rename) prevents partial reads; hook reads complete file or previous version
+**Condition**: Race between security daemon write and hook read
+**Response**: Atomic write (temp + rename) prevents partial reads; hook reads complete file or previous version — security state is never ambiguous
 **Recovery**: Automatic — next heartbeat write succeeds
 
 ### Scenario: `keel` binary not on PATH
 
-**Condition**: Binary absent or removed after install
-**Response**: `init.cjs` `detectKeel()` returns `{ keel_installed: false }`; all GSD workflows skip keel blocks; `gsd-statusline.js` continues displaying last known heartbeat state without invoking binary
+**Condition**: Security layer binary absent or removed after install — enforcement unavailable
+**Response**: `init.cjs` `detectKeel()` returns `{ keel_installed: false }`; all GSD workflows skip keel enforcement blocks; `gsd-statusline.js` continues displaying last known heartbeat state without invoking binary — GSD operates without its security layer
 **Recovery**: User re-runs `keel install --link`
 
 ### Scenario: Permission error creating `.keel/`
@@ -690,18 +722,20 @@ function stringifyYaml(value)  // → string
 
 ### Scenario: `fs.watch` not supported recursively
 
-**Condition**: Linux kernel without inotify recursive support
+**Condition**: Linux kernel without inotify recursive support — security monitoring degraded
 **Response**: Fall back to watching each top-level directory individually; log warning to stderr
-**Recovery**: Automatic fallback; slightly higher overhead
+**Recovery**: Automatic fallback; slightly higher overhead but security enforcement remains active
 
 
 ## Correctness Properties
 
-These properties are suitable for property-based testing (PBT) using fast-check.
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+These properties formalize the security invariants that keel's enforcement layer must maintain. They are suitable for property-based testing (PBT) using fast-check.
 
 ### P1: Alert Consolidation Invariant
 
-For any set of alerts generated by a single root cause event (same `cluster_id`), the number of entries written to `alerts.yaml` must be ≤ the number of distinct root causes.
+*For any* set of alerts generated by a single root cause event (same `cluster_id`) within the consolidation window, the number of entries written to `alerts.yaml` must be ≤ the number of distinct root causes — the security layer must never overwhelm the agent with redundant enforcement findings.
 
 ```
 ∀ alerts ∈ alerts.yaml,
@@ -714,7 +748,7 @@ For any set of alerts generated by a single root cause event (same `cluster_id`)
 
 ### P2: Staleness Invariant
 
-No alert in `alerts.yaml` shall persist after its source condition resolves.
+*For any* alert in `alerts.yaml`, its source condition must currently hold — the security layer must never block on ghost findings whose source condition has resolved.
 
 ```
 ∀ alert ∈ alerts.yaml:
@@ -725,7 +759,7 @@ No alert in `alerts.yaml` shall persist after its source condition resolves.
 
 ### P3: Atomic Write Integrity
 
-The heartbeat file and alerts file are never in a partially-written state observable by concurrent readers.
+*For any* concurrent read of the heartbeat or alerts file, the reader must observe either a complete valid state or the previous valid state — the security layer's enforcement state must never be ambiguous to GSD hooks.
 
 ```
 ∀ read(heartbeat.yaml): parse(content) succeeds OR content == previous_valid_content
@@ -736,18 +770,18 @@ The heartbeat file and alerts file are never in a partially-written state observ
 
 ### P4: Idempotent Start
 
-Running `keel companion start` N times results in exactly one running daemon process.
+*For any* number of `keel companion start` invocations, exactly one security daemon process must be running — the enforcement layer must never fork duplicate processes.
 
 ```
 ∀ n ≥ 1: after n calls to startDaemon(cwd),
-  count(processes matching daemon signature) == 1
+  count(processes matching security daemon signature) == 1
 ```
 
 **PBT approach**: Call `startDaemon` 1–5 times in sequence. Assert exactly one process with the keel daemon signature is running after all calls.
 
 ### P5: Done-Gate Soundness
 
-`keel done` exits 0 if and only if all 4 checks pass simultaneously.
+*For any* combination of the 4 security check states, `keel done` exits 0 if and only if all 4 checks pass simultaneously — the security gate must be sound (never lets drift through) and complete (never blocks clean stages).
 
 ```
 doneGate().passed == true
@@ -758,7 +792,7 @@ doneGate().passed == true
 
 ### P6: Alert History Completeness
 
-Every alert that is removed from `alerts.yaml` must appear in `alert-history.yaml` with a `cleared_at` timestamp and a valid `cleared_reason`.
+*For any* alert removed from `alerts.yaml`, a corresponding entry must appear in `alert-history.yaml` with a valid `cleared_at` timestamp and `cleared_reason` — the security audit trail must be complete.
 
 ```
 ∀ alert removed from alerts.yaml:
@@ -773,7 +807,7 @@ Every alert that is removed from `alerts.yaml` must appear in `alert-history.yam
 
 ### P7: Heartbeat Monotonicity
 
-`last_beat_at` in the heartbeat file must be non-decreasing across successive writes.
+*For any* consecutive heartbeat writes, `last_beat_at` must be non-decreasing — the security layer's liveness signal must never go backwards in time.
 
 ```
 ∀ consecutive heartbeat writes t1, t2:
@@ -791,10 +825,10 @@ Every alert that is removed from `alerts.yaml` must appear in `alert-history.yam
 
 **Key unit test areas**:
 
-- `yaml.js`: round-trip parse/stringify for all YAML shapes used in state files
-- `atomic.js`: verify temp file is cleaned up on success and failure
+- `yaml.js`: round-trip parse/stringify for all YAML shapes used in security state files
+- `atomic.js`: verify temp file is cleaned up on success and failure — state file integrity is critical for the security layer
 - `alerts.js` `consolidateAlerts()`: all consolidation edge cases (1 alert, 2 alerts same cluster, 2 alerts different clusters, window boundary)
-- `alerts.js` `ruleConditionHolds()`: each rule with true/false conditions
+- `alerts.js` `ruleConditionHolds()`: each security rule with true/false conditions
 - `checkpoint.js` `computeDrift()`: clean state, single drifted file, goal drift, VAL-004
 - `daemon.js` `getStatus()`: absent file, running=true fresh, running=true stale, running=false
 
@@ -802,7 +836,7 @@ Every alert that is removed from `alerts.yaml` must appear in `alert-history.yam
 
 **Library**: `fast-check` (add as dev dependency only).
 
-Implement the 7 correctness properties defined above as fast-check property tests:
+Implement the 7 correctness properties defined above as fast-check property tests. These properties formalize the security invariants that keel must maintain:
 
 ```javascript
 // P1: Consolidation invariant
@@ -818,26 +852,26 @@ fc.assert(fc.property(
 
 ### Integration Testing
 
-**Approach**: Spin up a real daemon against a temp directory, make file changes, assert alerts appear within 5 seconds.
+**Approach**: Spin up a real security daemon against a temp directory, make file changes, assert enforcement alerts appear within 5 seconds.
 
 **Key integration scenarios**:
-1. Full lifecycle: install → start → write out-of-scope file → assert SCOPE-001 alert → delete file → assert alert cleared
-2. Alert storm: write 3 out-of-scope files within 10s → assert single consolidated alert
-3. Done-gate: start companion → take checkpoint → write in-scope files → run `keel done` → assert exit 0
-4. Stale heartbeat: kill daemon process directly → wait 31s → assert `keel companion status` shows stale
+1. Full security lifecycle: install → start → write out-of-scope file → assert SCOPE-001 alert → delete file → assert alert cleared
+2. Alert storm: write 3 out-of-scope files within 10s → assert single consolidated enforcement alert
+3. Security gate: start companion → take checkpoint → write in-scope files → run `keel done` → assert exit 0 (security gate passes)
+4. Stale heartbeat: kill security daemon directly → wait 31s → assert `keel companion status` shows stale (enforcement layer down)
 
 ### Manual Smoke Tests
 
-Run against a real GSD repo:
+Run against a real GSD repo to verify the security layer end-to-end:
 ```bash
 keel install
-keel companion status   # → running: true
-keel drift              # → clean
+keel companion status   # → running: true (security layer active)
+keel drift              # → clean (no drift from security baseline)
 # touch a file outside scope
-keel drift              # → 1 drift finding
-keel done               # → exit 1, blocker listed
-keel advance            # → step marked complete
-keel done               # → exit 0
+keel drift              # → 1 drift finding (security violation detected)
+keel done               # → exit 1, security blocker listed
+keel advance            # → step marked complete, security baseline updated
+keel done               # → exit 0 (security gate passes)
 ```
 
 ## Performance Considerations
@@ -852,41 +886,41 @@ keel done               # → exit 0
 
 ### Overview
 
-GSD fully orchestrates the keel companion lifecycle. The companion starts automatically when GSD phases begin and stops when they end. Users never invoke keel directly during normal GSD operation.
+GSD fully orchestrates keel's security layer lifecycle. The security enforcement activates automatically when GSD phases begin and deactivates when they end. Users never invoke keel directly during normal GSD operation — GSD manages the security layer transparently, ensuring every phase is protected by real-time drift detection.
 
 ### Phase Start Sequence
 
-When a GSD phase begins (via `execute-phase` or equivalent):
+When a GSD phase begins (via `execute-phase` or equivalent), the security layer is activated:
 
 ```
 1. GSD_Init returns JSON context including keel_installed: bool
 2. IF keel_installed == true:
-   a. Invoke: keel companion start  (fire-and-forget, stdout+stderr → /dev/null)
-   b. Invoke: keel checkpoint        (anchor phase start state)
-3. Continue with phase work
+   a. Invoke: keel companion start  (activate security enforcement, fire-and-forget)
+   b. Invoke: keel checkpoint        (establish security baseline for this phase)
+3. Continue with phase work (now protected by real-time drift detection)
 ```
 
-`keel companion start` is idempotent — if the companion is already running, it exits 0 without disruption. GSD workflows never check `keel companion status` before calling start; the idempotency guarantee makes the status check unnecessary and avoids latency.
+`keel companion start` is idempotent — if the security daemon is already running, it exits 0 without disruption. GSD workflows never check `keel companion status` before calling start; the idempotency guarantee makes the status check unnecessary and avoids latency.
 
 ### Phase End Sequence
 
-When a GSD phase ends (via `verify-work` or equivalent):
+When a GSD phase ends (via `verify-work` or equivalent), the security gate is evaluated:
 
 ```
 1. IF keel_installed == true:
-   a. Invoke: keel done              (done-gate check)
+   a. Invoke: keel done              (security gate — pass/fail enforcement check)
    b. IF keel done exits non-zero:
-      - Surface blocker message to agent
-      - Halt phase completion
+      - Surface security blocker message to agent
+      - Halt phase completion (security layer blocks the stage)
       - Print resolution command (keel advance or keel checkpoint)
    c. IF keel done exits 0:
-      - Invoke: keel companion stop  (fire-and-forget, stdout+stderr → /dev/null)
+      - Invoke: keel companion stop  (deactivate security enforcement)
 2. Continue with phase completion
 ```
 
 ### Silent Invocation Contract
 
-All GSD workflow keel invocations redirect stdout and stderr to `/dev/null` unless the output is explicitly consumed (e.g., `keel done` blocker messages, `keel drift --json` output). This ensures keel never produces visible noise during normal GSD operation.
+All GSD workflow keel invocations redirect stdout and stderr to `/dev/null` unless the output is explicitly consumed (e.g., `keel done` security blocker messages, `keel drift --json` output). The security layer operates silently during normal GSD operation — it only surfaces when enforcement action is needed.
 
 ```bash
 # Pattern for fire-and-forget keel calls in GSD workflows
@@ -899,14 +933,14 @@ DRIFT_JSON=$(keel drift --json 2>/dev/null)
 
 ### Milestone Completion Blocking
 
-When `complete-milestone` is invoked:
+When `complete-milestone` is invoked, keel's security layer enforces a final drift check:
 
 ```
 1. IF keel_installed == true AND .keel/session/alerts.yaml exists:
-   a. Read alerts.yaml
+   a. Read alerts.yaml (current enforcement state)
    b. IF any alert has severity: high AND deterministic: true:
-      - Invoke: keel done
-      - IF keel done exits non-zero: block milestone completion, surface blockers
+      - Invoke: keel done (security gate)
+      - IF keel done exits non-zero: block milestone completion, surface security blockers
 2. Continue with milestone completion
 ```
 
@@ -914,14 +948,16 @@ If `.keel/session/alerts.yaml` does not exist or is empty, the drift gate is tre
 
 ### Fallback When Binary Is Absent
 
-If `command -v keel` fails at any GSD phase hook invocation point, the entire keel block is skipped silently. The `keel_installed` field from `GSD_Init` is the single gate — GSD workflows check this field once rather than re-running `command -v keel` inline.
+If `command -v keel` fails at any GSD phase hook invocation point, the entire security enforcement block is skipped silently. GSD continues to function identically — just without drift protection. The `keel_installed` field from `GSD_Init` is the single gate — GSD workflows check this field once rather than re-running `command -v keel` inline.
 
 
 ## Drift Data Feedback into GSD Context
 
+Keel's security findings are automatically surfaced into GSD's planning context so agents can see the enforcement posture without explicitly invoking keel commands.
+
 ### KEEL-STATUS.md Refresh Contract
 
-The companion refreshes `.planning/KEEL-STATUS.md` whenever alert state changes during a watch cycle. This keeps the file current for GSD agents reading `.planning/` context.
+The security daemon refreshes `.planning/KEEL-STATUS.md` whenever enforcement state changes during a watch cycle. This keeps the security summary current for GSD agents reading `.planning/` context.
 
 Refresh triggers:
 - Any new alert written to `alerts.yaml`
@@ -933,7 +969,7 @@ The file is skipped silently if `.planning/` does not exist.
 
 ### High-Severity Warning Section
 
-When KEEL-STATUS.md is written and one or more `severity: high` alerts are active, the file includes a `## ⚠ Drift Warning` section:
+When KEEL-STATUS.md is written and one or more `severity: high` alerts are active, the security summary includes a `## ⚠ Drift Warning` section — this is the primary mechanism by which keel's security findings are surfaced to GSD agents during execution:
 
 ```markdown
 ## ⚠ Drift Warning
@@ -949,15 +985,15 @@ The following blockers must be resolved before phase completion:
 
 ### Drift Report JSON Persistence
 
-`keel drift --json` writes its output to two destinations simultaneously:
+`keel drift --json` writes its security audit output to two destinations simultaneously:
 1. stdout (for direct consumption by calling scripts)
 2. `.keel/session/drift-report.json` (for GSD hooks to read without re-invoking keel)
 
-This allows GSD hooks to read the last drift report without spawning a subprocess.
+This allows GSD hooks to read the last security audit report without spawning a subprocess.
 
 ### GSD_Init Context Enrichment
 
-When `GSD_Init` is called with `keel_installed: true`, the response includes:
+When `GSD_Init` is called with `keel_installed: true`, the response includes the security layer's current state:
 
 ```json
 {
@@ -971,7 +1007,7 @@ When `GSD_Init` is called with `keel_installed: true`, the response includes:
 }
 ```
 
-`keel_status` is `null` if the heartbeat file is absent. This gives GSD workflows heartbeat state without a separate file read.
+`keel_status` is `null` if the heartbeat file is absent. This gives GSD workflows the security layer's liveness state without a separate file read.
 
 ### Context Freshness Gate
 
@@ -979,14 +1015,16 @@ GSD workflows include KEEL-STATUS.md in agent context only when:
 - The file exists at `.planning/KEEL-STATUS.md`
 - The `Last updated` timestamp is within 60 seconds of the current time
 
-If the file is absent or stale, the workflow proceeds without KEEL context and surfaces no error to the agent.
+If the security summary is absent or stale, the workflow proceeds without KEEL context and surfaces no error to the agent.
 
 
 ## Git Event Integration
 
+Git events are a critical input to keel's security layer — branch switches and commits change the context that drift is measured against. Keel hooks into git to keep its security baselines anchored to the actual git context.
+
 ### Git Hook Installation
 
-`keel install` installs two git hooks into `.git/hooks/`:
+`keel install` installs two git hooks into `.git/hooks/` that feed git events into the security layer:
 
 **`.git/hooks/post-checkout`**:
 ```bash
@@ -1002,7 +1040,7 @@ keel git-event branch-switch "$1" "$2" "$3" 2>/dev/null || true
 keel git-event commit 2>/dev/null || true
 ```
 
-Both hooks exit 0 unconditionally (via `|| true`) so a keel failure never blocks git operations. If `.git/` does not exist, `keel install` skips hook installation silently.
+Both hooks exit 0 unconditionally (via `|| true`) so a security layer failure never blocks git operations. If `.git/` does not exist, `keel install` skips hook installation silently.
 
 ### Branch Switch Handling
 
@@ -1037,7 +1075,7 @@ END
 
 ### Commit Auto-Checkpoint
 
-When a `post-commit` event fires and the companion is running:
+When a `post-commit` event fires and the security daemon is running, keel automatically re-baselines:
 
 ```
 ALGORITHM handleCommit()
@@ -1048,7 +1086,7 @@ BEGIN
 END
 ```
 
-This anchors the committed state as the new drift baseline, preventing false positives for files that were intentionally committed.
+This anchors the committed state as the new security baseline, preventing false positives for files that were intentionally committed.
 
 ### Git Rule Definition
 
@@ -1092,9 +1130,11 @@ The `keel drift --json` output includes:
 
 ## Claude Code CLI Compatibility
 
+Keel's security layer must operate correctly within the Claude Code execution environment, where the agent process may exit at any time and PATH resolution may differ from the user's shell.
+
 ### Daemon Fork Requirements
 
-The daemon fork uses `child_process.spawn` with specific options to ensure compatibility with Claude Code's execution environment:
+The security daemon fork uses `child_process.spawn` with specific options to ensure the enforcement layer survives the Claude Code agent's lifecycle:
 
 ```javascript
 const child = spawn(process.execPath, [keelBinPath, '--daemon'], {
@@ -1107,24 +1147,24 @@ child.unref()        // parent exits immediately; daemon runs independently
 ```
 
 This ensures:
-- The daemon does not inherit Claude Code's stdio file descriptors
-- The daemon survives the parent process (Claude Code agent) exiting
-- The daemon continues running if Claude Code is interrupted or killed
+- The security daemon does not inherit Claude Code's stdio file descriptors
+- The security daemon survives the parent process (Claude Code agent) exiting
+- The enforcement layer continues running if Claude Code is interrupted or killed
 
 ### PATH Resolution for Claude Code
 
-`keel install --link` creates a symlink at `/usr/local/bin/keel` (fallback: `~/bin/keel`) and prints the resolved path:
+`keel install --link` creates a symlink at `/usr/local/bin/keel` (fallback: `~/bin/keel`) and prints the resolved path. This ensures the security layer binary is resolvable via PATH in all Claude Code execution contexts:
 
 ```
 ✓ keel linked: /usr/local/bin/keel → /path/to/repo/keel/bin/keel.js
   Add to PATH if not already present: export PATH="/usr/local/bin:$PATH"
 ```
 
-This allows Claude Code workflows to resolve `keel` via PATH without project-relative path assumptions.
+This allows Claude Code workflows to resolve `keel` via PATH without project-relative path assumptions, ensuring the security layer is always accessible.
 
 ### Statusline Hook Compatibility
 
-`gsd-statusline.js` reads `.keel/session/companion-heartbeat.yaml` directly from disk rather than invoking `keel companion status`. This avoids PATH resolution failures in the hook's execution context within Claude Code terminals.
+`gsd-statusline.js` reads `.keel/session/companion-heartbeat.yaml` directly from disk rather than invoking `keel companion status`. This avoids PATH resolution failures in the hook's execution context within Claude Code terminals, ensuring the security layer's status is always visible.
 
 ```javascript
 // Correct: direct file read (no subprocess)
@@ -1136,7 +1176,7 @@ const heartbeat = readHeartbeatFile(cwd)
 
 ### GSD_Init Binary Detection
 
-`init.cjs` detects keel via `which keel` (binary presence), not `.keel/` directory presence:
+`init.cjs` detects the security layer via `which keel` (binary presence), not `.keel/` directory presence:
 
 ```javascript
 function detectKeel(cwd) {
@@ -1149,11 +1189,11 @@ function detectKeel(cwd) {
 }
 ```
 
-`keel_installed: false` is returned when the binary is absent regardless of `.keel/` directory state. This is accurate in all Claude Code working directory contexts.
+`keel_installed: false` is returned when the security layer binary is absent regardless of `.keel/` directory state. This is accurate in all Claude Code working directory contexts.
 
 ### Fire-and-Forget Invocation Pattern
 
-GSD workflows running in Claude Code invoke keel as fire-and-forget bash commands, not blocking subprocesses:
+GSD workflows running in Claude Code invoke the security layer as fire-and-forget bash commands, not blocking subprocesses:
 
 ```bash
 # Fire-and-forget: exit code is the only signal consumed
@@ -1161,22 +1201,25 @@ keel companion start 2>/dev/null
 echo $?  # 0 = success, non-zero = failure
 ```
 
-The workflow never waits for confirmation output from keel — exit code 0 is the complete success signal.
+The workflow never waits for confirmation output from the security layer — exit code 0 is the complete success signal.
 
 
 ## Security Considerations
 
-- The daemon runs as the same user who invoked `keel companion start` — no privilege escalation
-- State files in `.keel/session/` should be added to `.gitignore` (written by `keel init`)
-- `keel.yaml` config does not accept shell commands or eval-able content — all values are data
-- The YAML parser (`yaml.js`) does not execute arbitrary code; it handles only the known schema shapes
+Keel is the security layer of GSD, but it must also be secure in its own implementation:
+
+- The security daemon runs as the same user who invoked `keel companion start` — no privilege escalation
+- State files in `.keel/session/` are added to `.gitignore` (written by `keel install`) — enforcement state is local-only and never committed
+- `keel.yaml` config does not accept shell commands or eval-able content — all values are data, preventing config injection
+- The YAML parser (`yaml.js`) does not execute arbitrary code; it handles only the known schema shapes — no deserialization attacks
 - Git hook scripts installed by `keel install` contain only static keel invocations — no user-controlled content is interpolated into hook scripts
+- The security layer degrades gracefully: when keel is unavailable, GSD continues without enforcement rather than failing — availability is preserved even when the security layer is down
 
 ## Dependencies
 
-**Runtime**: None. Node.js built-ins only (`fs`, `path`, `child_process`, `os`, `crypto`).
+**Runtime**: None. Node.js built-ins only (`fs`, `path`, `child_process`, `os`, `crypto`). The security layer has zero external runtime dependencies — this minimizes the attack surface and keeps installation friction minimal.
 
-**Dev/test**: `fast-check` for property-based tests.
+**Dev/test**: `fast-check` for property-based tests (verifying security invariants).
 
 **Node.js version**: ≥ 18.0.0 (required for `fs.watch` recursive option on macOS/Windows and `node:test` built-in).
 

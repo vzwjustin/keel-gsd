@@ -107,6 +107,10 @@ process.stdin.on('end', () => {
     }
 
     // KEEL companion + drift state
+    // Reads heartbeat directly from disk (no subprocess) — Req 10.5, 15.6.
+    // Displays no KEEL indicator when heartbeat absent — Req 10.4, 2.8.
+    // No binary detection subprocess (which keel) — avoids PATH resolution
+    // failures in Claude Code hook execution context.
     let keelState = '';
     try {
       const keelDir = path.join(dir, '.keel', 'session');
@@ -148,6 +152,7 @@ process.stdin.on('end', () => {
           keelState = ' │ \x1b[2m⚓ off\x1b[0m';
         }
       }
+      // When heartbeat file absent: keelState stays '' — no indicator shown (Req 2.8, 10.4)
     } catch (e) {}
 
     // Output

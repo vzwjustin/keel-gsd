@@ -147,7 +147,12 @@ node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "wip: [phase-name] p
 ```
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Detect keel binary presence — single check, store result (Req 10.3, 10.6).
+keel_installed="false"
+if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
+
+# Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel checkpoint 2>/dev/null
   keel companion stop 2>/dev/null
 fi

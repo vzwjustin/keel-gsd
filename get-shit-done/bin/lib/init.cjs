@@ -63,15 +63,49 @@ function parseKeelStatus(content) {
 }
 
 /**
- * Detect KEEL installation and read KEEL-STATUS.md if available.
+ * Parse companion-heartbeat.yaml content into a plain object.
+ * The heartbeat is a flat key-value YAML file with fields like:
+ *   running: true
+ *   pid: 12345
+ *   last_beat_at: "2025-01-15T10:30:00.000Z"
+ * Returns null for empty/malformed content.
+ */
+function parseHeartbeat(content) {
+  if (!content || !content.trim()) return null;
+  const result = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf(':');
+    if (idx < 1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    let val = trimmed.slice(idx + 1).trim();
+    // Strip surrounding quotes
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    // Coerce booleans and numbers
+    if (val === 'true') val = true;
+    else if (val === 'false') val = false;
+    else if (val === 'null') val = null;
+    else if (val !== '' && !isNaN(Number(val))) val = Number(val);
+    result[key] = val;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Detect KEEL installation and read heartbeat data if available.
  * Returns { keel_installed: false } when the keel binary is absent OR
  * the .keel directory doesn't exist.
  * Returns { keel_installed: true, keel_status: <parsed|null> } only when
  * both the binary is present (verified via `which keel`) AND .keel/ exists.
+ * keel_status contains parsed companion-heartbeat.yaml data (or null if absent).
  *
- * Checking the binary prevents false positives when .keel/ exists from a
- * previous install but the binary is no longer on PATH — every keel command
- * would fail with ENOENT, breaking companion start and all guardrail blocks.
+ * keel_installed is derived from `which keel` binary presence, not .keel/
+ * directory presence — this is accurate in all Claude Code working directory
+ * contexts and prevents false positives when .keel/ exists from a previous
+ * install but the binary is no longer on PATH.
  */
 function detectKeel(cwd) {
   // Check binary first — directory presence alone is not sufficient
@@ -82,11 +116,12 @@ function detectKeel(cwd) {
   }
   const keelDir = path.join(cwd, '.keel');
   if (!fs.existsSync(keelDir)) return { keel_installed: false };
-  const statusPath = path.join(cwd, '.planning', 'KEEL-STATUS.md');
+  // Read heartbeat data for keel_status (Req 12.7)
+  const heartbeatPath = path.join(cwd, '.keel', 'session', 'companion-heartbeat.yaml');
   let keelStatus = null;
-  if (fs.existsSync(statusPath)) {
+  if (fs.existsSync(heartbeatPath)) {
     try {
-      keelStatus = parseKeelStatus(fs.readFileSync(statusPath, 'utf-8'));
+      keelStatus = parseHeartbeat(fs.readFileSync(heartbeatPath, 'utf-8'));
     } catch (e) { /* ignore read errors */ }
   }
   return { keel_installed: true, keel_status: keelStatus };
@@ -1491,6 +1526,7 @@ module.exports = {
   detectChildRepos,
   detectKeel,
   parseKeelStatus,
+  parseHeartbeat,
   buildAgentSkillsBlock,
   cmdAgentSkills,
 };

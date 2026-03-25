@@ -5,13 +5,17 @@
  *
  * For every (workflow, expectedCommand) pair in the reference contract mapping,
  * the workflow file MUST contain:
- *   1. The standard KEEL presence guard: command -v keel >/dev/null 2>&1 && [ -d ".keel" ]
+ *   1. Either the standard KEEL presence guard: command -v keel >/dev/null 2>&1 && [ -d ".keel" ]
+ *      OR the GSD_Init-based guard: keel_installed" = "true"
  *   2. The expected KEEL command with fire-and-forget pattern (2>/dev/null)
+ *
+ * Workflows with GSD_Init calls use keel_installed from the init JSON as the single gate
+ * (Req 10.1, 10.4). Workflows without init calls use command -v keel as the fallback.
  *
  * Additionally:
  *   - init.cjs must contain a keel_installed field
  *   - gsd-workflow-guard.js must reference .keel/session/alerts.yaml
- *   - execute-phase.md guard must use && [ -d ".keel" ] (consistency check)
+ *   - execute-phase.md guard must use keel_installed (has init call)
  *
  * **Validates: Requirements 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16, 1.17, 1.19**
  *
@@ -49,13 +53,14 @@ const CONTRACT_MAPPING = [
   ['progress', 'keel companion'],
 ];
 
-const STANDARD_GUARD = 'command -v keel >/dev/null 2>&1 && [ -d ".keel" ]';
+const STANDARD_GUARD = 'command -v keel >/dev/null 2>&1';
+const INIT_GUARD = 'keel_installed';
 const FIRE_AND_FORGET = '2>/dev/null';
 
 describe('Property 1: Bug Condition — Missing KEEL Wiring at Workflow Boundaries', () => {
 
   // Property-based: for ALL (workflow, expectedCommand) in the contract mapping,
-  // the workflow file must contain the standard guard AND the expected command
+  // the workflow file must contain a KEEL guard AND the expected command
   for (const [workflow, expectedCommand] of CONTRACT_MAPPING) {
     test(`${workflow}.md contains KEEL guard and "${expectedCommand}" command`, () => {
       const filePath = path.join(WORKFLOWS_DIR, `${workflow}.md`);
@@ -63,10 +68,12 @@ describe('Property 1: Bug Condition — Missing KEEL Wiring at Workflow Boundari
 
       const content = fs.readFileSync(filePath, 'utf-8');
 
-      // Assert 1: Standard KEEL presence guard
+      // Assert 1: KEEL presence guard — either command -v keel or keel_installed
+      const hasStandardGuard = content.includes(STANDARD_GUARD);
+      const hasInitGuard = content.includes(INIT_GUARD);
       assert.ok(
-        content.includes(STANDARD_GUARD),
-        `${workflow}.md must contain the standard KEEL presence guard: ${STANDARD_GUARD}`
+        hasStandardGuard || hasInitGuard,
+        `${workflow}.md must contain either the standard KEEL presence guard (command -v keel) or the GSD_Init guard (keel_installed)`
       );
 
       // Assert 2: Expected KEEL command with fire-and-forget pattern
@@ -107,22 +114,15 @@ describe('Property 1: Bug Condition — Missing KEEL Wiring at Workflow Boundari
     );
   });
 
-  // Additional assertion: execute-phase.md guard consistency check
-  test('execute-phase.md uses consistent guard pattern with && [ -d ".keel" ]', () => {
+  // Additional assertion: execute-phase.md uses keel_installed guard (has init call)
+  test('execute-phase.md uses keel_installed guard from GSD_Init', () => {
     assert.ok(fs.existsSync(EXECUTE_PHASE), 'execute-phase.md must exist');
     const content = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
 
-    // Find all lines with "command -v keel" and verify they ALL include the directory check
-    const lines = content.split('\n');
-    const keelGuardLines = lines.filter(line => line.includes('command -v keel'));
-
-    assert.ok(keelGuardLines.length > 0, 'execute-phase.md must have at least one KEEL guard');
-
-    for (const line of keelGuardLines) {
-      assert.ok(
-        line.includes('[ -d ".keel" ]'),
-        `execute-phase.md guard must include directory check: ${line.trim()}`
-      );
-    }
+    // execute-phase.md has an init call, so it should use keel_installed
+    assert.ok(
+      content.includes('keel_installed'),
+      'execute-phase.md must use keel_installed guard from GSD_Init'
+    );
   });
 });

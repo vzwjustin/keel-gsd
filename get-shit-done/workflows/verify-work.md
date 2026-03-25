@@ -194,12 +194,14 @@ Proceed to `keel_done_precheck`.
 <step name="keel_done_precheck">
 **KEEL drift pre-check (advisory):**
 
-Before presenting the first test, check for unresolved KEEL drift:
+Before presenting the first test, check for unresolved KEEL drift.
+Gate on `keel_installed` from GSD_Init (already available from the `initialize` step) — skip silently when false.
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel done 2>/dev/null
-  KEEL_DONE=$(keel --json done 2>/dev/null)
+  KEEL_DONE=$(keel done --json 2>/dev/null)
   if echo "$KEEL_DONE" | grep -q '"passed": false'; then
     echo "⚠️ KEEL drift warning — unresolved drift detected before verification"
   fi
@@ -394,7 +396,61 @@ Present summary:
 
 **If issues > 0:** Proceed to `diagnose_issues`
 
-**If issues == 0:**
+**If issues == 0:** Proceed to `keel_done_gate`
+</step>
+
+<step name="keel_done_gate">
+**KEEL done-gate enforcement (hard block before phase completion):**
+
+This is the security enforcement boundary — keel decides whether the phase is clean enough to proceed.
+
+Parse `keel_installed` from the init JSON (already available from the `initialize` step).
+
+```bash
+# Skip drift gate entirely if keel binary is not on PATH (Req 13.4)
+if [ "$keel_installed" = "true" ]; then
+  KEEL_DONE_OUTPUT=$(keel done 2>&1)
+  KEEL_DONE_EXIT=$?
+
+  if [ $KEEL_DONE_EXIT -ne 0 ]; then
+    # Security layer blocks phase completion — surface blocker output and halt
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " ⚓ KEEL DRIFT GATE — PHASE COMPLETION BLOCKED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "$KEEL_DONE_OUTPUT"
+    echo ""
+    echo "Resolve the above blockers, then re-run /gsd:verify-work ${PHASE_ARG}"
+    echo ""
+    # HALT — do not proceed to phase completion
+  else
+    # Security gate passed — deactivate enforcement layer
+    keel companion stop 2>/dev/null
+  fi
+fi
+```
+
+**If `keel done` exits non-zero:**
+
+Surface the blocker output to the agent and halt. Display:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ⚓ KEEL DRIFT GATE — PHASE COMPLETION BLOCKED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{keel done output — blocker messages with resolution commands}
+
+Resolve the above blockers, then re-run `/gsd:verify-work {phase}`
+```
+
+Do NOT proceed to phase completion. Do NOT present "Ready to continue" next steps. STOP here.
+
+**If `keel done` exits 0 (or `keel_installed` is false):**
+
+Phase is clean. Proceed to present completion:
+
 ```
 All tests passed. Ready to continue.
 
@@ -649,6 +705,9 @@ Default to **major** if unclear. User can correct if needed.
 - [ ] Severity inferred from description (never asked)
 - [ ] Batched writes: on issue, every 5 passes, or completion
 - [ ] Committed on completion
+- [ ] If no issues: `keel done` gate enforced when `keel_installed` is true — blocks phase completion on non-zero exit
+- [ ] If no issues: `keel companion stop` called on `keel done` exit 0
+- [ ] If no issues: keel gate skipped silently when `keel_installed` is false
 - [ ] If issues: parallel debug agents diagnose root causes
 - [ ] If issues: gsd-planner creates fix plans (gap_closure mode)
 - [ ] If issues: gsd-plan-checker verifies fix plans

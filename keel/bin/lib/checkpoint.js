@@ -97,6 +97,10 @@ function writeCheckpoint(cwd, data) {
     plan_steps: Array.isArray(data.plan_steps) ? data.plan_steps : [],
   };
 
+  // Optional git context fields
+  if (data.branch) record.branch = data.branch;
+  if (data.git_commit) record.git_commit = data.git_commit;
+
   writeAtomic(filePath, stringifyYaml(record));
 }
 

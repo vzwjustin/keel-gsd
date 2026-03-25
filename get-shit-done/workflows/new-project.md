@@ -76,8 +76,9 @@ git init
 
 **KEEL guardrail bootstrap (fire-and-forget):**
 ```bash
-# Bootstrap guard: .keel/ doesn't exist yet, so we check binary only (not [ -d ".keel" ])
-if command -v keel >/dev/null 2>&1; then
+# Gate on keel_installed from init JSON (Req 10.1, 10.4).
+# Bootstrap guard: .keel/ doesn't exist yet, so we only check binary presence.
+if [ "$keel_installed" = "true" ]; then
   keel init 2>/dev/null
   keel scan 2>/dev/null
   keel companion start 2>/dev/null
@@ -87,7 +88,7 @@ fi
 **KEEL drift protection offer (greenfield):**
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ ! -d ".keel" ]; then
+if [ "$keel_installed" = "true" ] && [ ! -d ".keel" ]; then
   # Bootstrap ran but .keel/ wasn't created — offer manual setup
 fi
 ```

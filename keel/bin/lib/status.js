@@ -25,6 +25,28 @@ function readYamlFile(filePath) {
   }
 }
 
+/**
+ * Return a human-readable resolution command for a given alert rule.
+ * @param {string} rule
+ * @returns {string}
+ */
+function resolutionForRule(rule) {
+  switch (rule) {
+    case 'SCOPE-001':
+      return 'run `keel advance` to acknowledge or revert the file';
+    case 'GOAL-001':
+      return 'run `keel goal` to re-anchor';
+    case 'VAL-004':
+      return 'resolve questions in unresolved-questions.yaml';
+    case 'STEP-001':
+      return 'run `keel advance`';
+    case 'GIT-001':
+      return 'run `keel checkpoint` to re-anchor';
+    default:
+      return 'run `keel advance` or `keel checkpoint`';
+  }
+}
+
 // ─── buildStatusMarkdown ──────────────────────────────────────────────────────
 
 /**
@@ -75,6 +97,25 @@ function buildStatusMarkdown(state) {
     }
   }
   lines.push('');
+
+  // Drift Warning — high-severity alerts (Requirement 12.4)
+  const highAlerts = Array.isArray(alerts)
+    ? alerts.filter(a => a.severity === 'high')
+    : [];
+
+  if (highAlerts.length > 0) {
+    lines.push('## ⚠ Drift Warning');
+    lines.push('');
+    lines.push('The following blockers must be resolved before phase completion:');
+    lines.push('');
+    for (const alert of highAlerts) {
+      const rule = alert.rule || 'UNKNOWN';
+      const msg = alert.message || '';
+      lines.push(`- ${rule}: ${msg}`);
+      lines.push(`  Resolution: ${resolutionForRule(rule)}`);
+    }
+    lines.push('');
+  }
 
   // Blockers — high-severity deterministic alerts
   const blockers = Array.isArray(alerts)

@@ -125,8 +125,10 @@ AGENT_SKILLS_VERIFIER=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" age
 ```
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
+# keel companion start is idempotent — no need to check status first.
+if [ "$keel_installed" = "true" ]; then
+  keel companion start 2>/dev/null
 fi
 ```
 

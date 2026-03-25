@@ -122,6 +122,89 @@ Wait for confirmation.
 
 </step>
 
+<step name="keel_drift_gate">
+**KEEL drift gate — block milestone completion on high-severity drift:**
+
+Skip this gate entirely if keel binary is not on PATH or alerts file is absent/empty (Req 10.1, 13.4).
+
+```bash
+# Detect keel binary presence — single check, store result (Req 10.3, 10.6).
+# complete-milestone runs this early so both keel_drift_gate and milestone close can use it.
+keel_installed="false"
+if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
+
+# Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
+  # Read alerts.yaml — skip if absent or empty (Req 13.5)
+  ALERTS_FILE=".keel/session/alerts.yaml"
+  if [ -f "$ALERTS_FILE" ] && [ -s "$ALERTS_FILE" ]; then
+    # Check for high-severity deterministic alerts using inline node script
+    HAS_BLOCKERS=$(node -e "
+      const fs = require('fs');
+      try {
+        const content = fs.readFileSync('$ALERTS_FILE', 'utf8').trim();
+        if (!content || content === '[]') { process.stdout.write('false'); process.exit(0); }
+        // Parse YAML alerts — look for severity: high AND deterministic: true
+        const lines = content.split('\n');
+        let inAlert = false, isHigh = false, isDeterm = false, found = false;
+        for (const line of lines) {
+          if (line.startsWith('- ')) { 
+            if (inAlert && isHigh && isDeterm) { found = true; break; }
+            inAlert = true; isHigh = false; isDeterm = false;
+          }
+          if (/severity:\s*high/.test(line)) isHigh = true;
+          if (/deterministic:\s*true/.test(line)) isDeterm = true;
+        }
+        if (inAlert && isHigh && isDeterm) found = true;
+        process.stdout.write(found ? 'true' : 'false');
+      } catch(e) { process.stdout.write('false'); }
+    " 2>/dev/null)
+
+    if [ "$HAS_BLOCKERS" = "true" ]; then
+      # High-severity deterministic drift detected — invoke keel done gate (Req 13.2)
+      KEEL_DONE_OUTPUT=$(keel done 2>&1)
+      KEEL_DONE_EXIT=$?
+
+      if [ $KEEL_DONE_EXIT -ne 0 ]; then
+        # Security layer blocks milestone completion — surface blockers and halt (Req 13.3)
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo " ⚓ KEEL DRIFT GATE — MILESTONE COMPLETION BLOCKED"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "$KEEL_DONE_OUTPUT"
+        echo ""
+        echo "Resolve the above blockers, then re-run /gsd:complete-milestone"
+        echo ""
+        # HALT — do not proceed to milestone archival
+      fi
+    fi
+  fi
+fi
+```
+
+**If `keel done` exits non-zero:**
+
+Surface the blocker output and halt. Display:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ⚓ KEEL DRIFT GATE — MILESTONE COMPLETION BLOCKED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{keel done output — blocker messages with resolution commands}
+
+Resolve the above blockers, then re-run `/gsd:complete-milestone`
+```
+
+Do NOT proceed to milestone archival. Do NOT present stats or next steps. STOP here.
+
+**If no high-severity deterministic alerts (or keel not available):**
+
+Proceed to gather_stats.
+
+</step>
+
 <step name="gather_stats">
 
 Calculate milestone statistics:
@@ -717,10 +800,11 @@ Tag: v[X.Y]
 ---
 ```
 
-**KEEL milestone close (fire-and-forget):**
+**KEEL milestone close (fire-and-forget) — skip silently when binary absent (Req 10.1):**
 
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+# Gate on keel_installed — single field check, set earlier in keel_drift_gate (Req 10.1, 10.4).
+if [ "$keel_installed" = "true" ]; then
   keel checkpoint 2>/dev/null
   keel companion stop 2>/dev/null
 fi
@@ -755,6 +839,9 @@ Heuristic: "Is this deployed/usable/shipped?" If yes → milestone. If no → ke
 
 Milestone completion is successful when:
 
+- [ ] Keel drift gate passed (or skipped if keel absent/alerts empty)
+- [ ] High-severity deterministic drift blocks milestone completion when present
+- [ ] Keel drift gate skipped silently when binary not on PATH
 - [ ] MILESTONES.md entry created with stats and accomplishments
 - [ ] PROJECT.md full evolution review completed
 - [ ] All shipped requirements moved to Validated in PROJECT.md

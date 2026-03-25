@@ -200,9 +200,10 @@ Format each as: Test Name → What to do → Expected result → Why can't verif
 
 <step name="keel_done_gate">
 **KEEL guardrail (advisory):**
+Gate on `keel_installed` from GSD_Init — skip silently when false (Req 10.1, 10.4).
 ```bash
-if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
-  KEEL_DONE=$(keel --json done 2>/dev/null)
+if [ "$keel_installed" = "true" ]; then
+  KEEL_DONE=$(keel done --json 2>/dev/null)
   if echo "$KEEL_DONE" | grep -q '"passed": false'; then
     echo "KEEL done-gate: BLOCKED — drift unresolved"
     echo "$KEEL_DONE" | grep -o '"reason": "[^"]*"' | head -3
