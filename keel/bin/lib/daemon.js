@@ -218,6 +218,27 @@ function isDebounced(filePath, debounceMs) {
  * @param {string} filePath - relative path from cwd
  */
 function watchCycle(cwd, filePath) {
+  // Only evaluate drift if the file was actually modified (mtime newer than checkpoint).
+  // fs.watch on macOS fires for reads/access too — skip those to avoid false alerts
+  // during exploration/mapping workflows.
+  let checkpoint = null;
+  try {
+    checkpoint = require('./checkpoint.js').loadLatestCheckpoint(cwd);
+  } catch { /* not available */ }
+
+  if (checkpoint) {
+    const checkpointTime = new Date(checkpoint.created_at).getTime();
+    try {
+      const stat = fs.statSync(path.join(cwd, filePath));
+      if (stat.mtimeMs <= checkpointTime) {
+        // File not actually modified since checkpoint — skip drift evaluation
+        return;
+      }
+    } catch {
+      // File may have been deleted — still evaluate
+    }
+  }
+
   // Evaluate drift rules for the changed file
   const newAlerts = evaluateDriftRules(cwd, filePath);
 
@@ -240,8 +261,20 @@ function watchCycle(cwd, filePath) {
     appendAlertHistory(cwd, clearedAlerts, 'auto');
   }
 
-  // Merge still-active + new alerts, then consolidate
-  const merged = stillActiveAlerts.concat(newAlerts);
+  // Merge still-active + new alerts, deduplicating by (rule, source_file)
+  // to prevent the same file from generating duplicate SCOPE-001 alerts
+  // on every watch cycle
+  const seen = new Set();
+  for (const alert of stillActiveAlerts) {
+    const key = `${alert.rule}:${alert.source_file || ''}`;
+    seen.add(key);
+  }
+  const dedupedNew = newAlerts.filter(alert => {
+    const key = `${alert.rule}:${alert.source_file || ''}`;
+    return !seen.has(key);
+  });
+
+  const merged = stillActiveAlerts.concat(dedupedNew);
   const finalAlerts = consolidateAlerts(merged, 10_000);
 
   // Write updated alerts.yaml atomically
@@ -250,7 +283,7 @@ function watchCycle(cwd, filePath) {
   // Refresh KEEL-STATUS.md if alert state changed
   const alertStateChanged =
     clearedAlerts.length > 0 ||
-    newAlerts.length > 0 ||
+    dedupedNew.length > 0 ||
     finalAlerts.length !== currentAlerts.length;
 
   if (alertStateChanged) {
