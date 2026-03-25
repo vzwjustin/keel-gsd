@@ -139,6 +139,12 @@ AGENT_SKILLS_ADVISOR=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" agen
 
 Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_research`, `has_context`, `has_plans`, `has_verification`, `plan_count`, `roadmap_exists`, `planning_exists`.
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel goal 2>/dev/null
+fi
+```
+
 **If `phase_found` is false:**
 ```
 Phase [X] not found in roadmap.

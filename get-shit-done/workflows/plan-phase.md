@@ -717,6 +717,16 @@ Options:
 
 If `TEXT_MODE` is true, present as a plain-text numbered list (options already shown in the block above). Otherwise use AskUserQuestion to present the options.
 
+## 13.5. KEEL Plan Sync
+
+After plans are finalized, sync to KEEL so it can generate drift-aware monitoring rules:
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel plan 2>/dev/null
+fi
+```
+
 ## 14. Present Final Status
 
 Route to `<offer_next>` OR `auto_advance` depending on flags/config.

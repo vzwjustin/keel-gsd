@@ -717,6 +717,15 @@ Tag: v[X.Y]
 ---
 ```
 
+**KEEL milestone close (fire-and-forget):**
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel checkpoint 2>/dev/null
+  keel companion stop 2>/dev/null
+fi
+```
+
 </step>
 
 </process>

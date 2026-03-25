@@ -19,6 +19,12 @@ What's the quick fix? (one sentence)
 ```
 
 Store as `$TASK`.
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
 </step>
 
 <step name="scope_check">

@@ -24,7 +24,19 @@ INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" init execute-phase "
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `config_path`.
+Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `config_path`, `keel_installed`.
+
+**Surface KEEL state awareness if available:**
+```bash
+if [ "$keel_installed" = "true" ]; then
+  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  if [ -n "$KEEL_STATUS" ]; then
+    echo "--- KEEL Status ---"
+    echo "$KEEL_STATUS"
+    echo "---"
+  fi
+fi
+```
 
 If `.planning/` missing: error.
 </step>
@@ -142,6 +154,16 @@ Deviations are normal — handle via rules below.
 1. Read @context files from prompt
 2. **MCP tools:** If CLAUDE.md or project instructions reference MCP tools (e.g. jCodeMunch for code navigation), prefer them over Grep/Glob when available. Fall back to Grep/Glob if MCP tools are not accessible.
 3. Per task:
+   - **KEEL pre-task drift check (advisory):**
+     ```bash
+     # KEEL pre-task drift check (advisory)
+     if [ "$keel_installed" = "true" ]; then
+       KEEL_ALERTS=$(grep -i "alert\|drift\|blocker" .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+       if [ -n "$KEEL_ALERTS" ]; then
+         echo "⚠️ KEEL drift advisory: $KEEL_ALERTS"
+       fi
+     fi
+     ```
    - **MANDATORY read_first gate:** If the task has a `<read_first>` field, you MUST read every listed file BEFORE making any edits. This is not optional. Do not skip files because you "already know" what's in them — read them. The read_first files establish ground truth for the task.
    - `type="auto"`: if `tdd="true"` → TDD execution. Implement with deviation rules + auth gates. Verify done criteria. Commit (see task_commit). Track hash for Summary.
    - `type="checkpoint:*"`: STOP → checkpoint_protocol → wait for user → continue only after confirmation.
@@ -369,6 +391,14 @@ if [[ $DURATION_MIN -ge 60 ]]; then
   DURATION="${HRS}h ${MIN}m"
 else
   DURATION="${DURATION_MIN} min"
+fi
+```
+</step>
+
+<step name="keel_advance">
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel advance 2>/dev/null
 fi
 ```
 </step>

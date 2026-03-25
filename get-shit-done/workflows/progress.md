@@ -16,7 +16,25 @@ INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" init progress)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `project_exists`, `roadmap_exists`, `state_exists`, `phases`, `current_phase`, `next_phase`, `milestone_version`, `completed_count`, `phase_count`, `paused_at`, `state_path`, `roadmap_path`, `project_path`, `config_path`.
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
+
+Extract from init JSON: `project_exists`, `roadmap_exists`, `state_exists`, `phases`, `current_phase`, `next_phase`, `milestone_version`, `completed_count`, `phase_count`, `paused_at`, `state_path`, `roadmap_path`, `project_path`, `config_path`, `keel_installed`.
+
+**Surface KEEL state awareness if available:**
+```bash
+if [ "$keel_installed" = "true" ]; then
+  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  if [ -n "$KEEL_STATUS" ]; then
+    echo "--- KEEL Status ---"
+    echo "$KEEL_STATUS"
+    echo "---"
+  fi
+fi
+```
 
 ```bash
 DISCUSS_MODE=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.discuss_mode 2>/dev/null || echo "discuss")

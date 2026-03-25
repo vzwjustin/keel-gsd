@@ -175,6 +175,12 @@ The CLI handles:
 
 Extract from result: `completed_phase`, `plans_executed`, `next_phase`, `next_phase_name`, `is_last_phase`.
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel checkpoint 2>/dev/null
+fi
+```
+
 </step>
 
 <step name="archive_prompts">

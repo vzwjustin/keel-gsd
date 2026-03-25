@@ -165,9 +165,21 @@ This updates Status, Last Activity, Current focus, Current Position, and plan co
 
 **KEEL guardrail (fire-and-forget):**
 ```bash
-if command -v keel >/dev/null 2>&1; then
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
   keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
   keel checkpoint 2>/dev/null
+fi
+```
+
+```bash
+# Surface KEEL state awareness if available
+if [ "$keel_installed" = "true" ]; then
+  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  if [ -n "$KEEL_STATUS" ]; then
+    echo "--- KEEL Status ---"
+    echo "$KEEL_STATUS"
+    echo "---"
+  fi
 fi
 ```
 </step>
@@ -588,6 +600,15 @@ Options:
 Use AskUserQuestion to present the options.
 </step>
 
+<step name="keel_pre_verify_drift">
+**KEEL guardrail — drift check before verification (fire-and-forget):**
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel drift 2>/dev/null
+fi
+```
+</step>
+
 <step name="verify_phase_goal">
 Verify phase achieved its GOAL, not just completed tasks.
 
@@ -763,7 +784,7 @@ node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(phase-{X}): ev
 <step name="keel_phase_close">
 **KEEL guardrail (fire-and-forget):**
 ```bash
-if command -v keel >/dev/null 2>&1; then
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
   keel checkpoint 2>/dev/null
 fi
 ```

@@ -27,6 +27,12 @@ Wait for response before continuing.
 INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state load 2>/dev/null)
 ```
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
+
 Track whether `.planning/` exists — some routes require it, others don't.
 </step>
 

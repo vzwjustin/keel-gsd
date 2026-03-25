@@ -188,6 +188,26 @@ skipped: 0
 
 Write to `.planning/phases/XX-name/{phase_num}-UAT.md`
 
+Proceed to `keel_done_precheck`.
+</step>
+
+<step name="keel_done_precheck">
+**KEEL drift pre-check (advisory):**
+
+Before presenting the first test, check for unresolved KEEL drift:
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel done 2>/dev/null
+  KEEL_DONE=$(keel --json done 2>/dev/null)
+  if echo "$KEEL_DONE" | grep -q '"passed": false'; then
+    echo "⚠️ KEEL drift warning — unresolved drift detected before verification"
+  fi
+fi
+```
+
+If drift is detected, surface the warning but continue — this is advisory only, it does NOT block verification.
+
 Proceed to `present_test`.
 </step>
 
@@ -318,7 +338,7 @@ Continuing from Test {N}...
 ```
 
 Update Current Test section with the pending test.
-Proceed to `present_test`.
+Proceed to `keel_done_precheck`.
 </step>
 
 <step name="complete_session">

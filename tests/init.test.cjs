@@ -1257,3 +1257,124 @@ describe('findProjectRoot integration via --cwd', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // roadmap analyze command
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseKeelStatus and detectKeel (KEEL integration helpers)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseKeelStatus', () => {
+  const { parseKeelStatus } = require('../get-shit-done/bin/lib/init.cjs');
+
+  test('returns null for empty string', () => {
+    assert.strictEqual(parseKeelStatus(''), null);
+  });
+
+  test('returns null for whitespace-only string', () => {
+    assert.strictEqual(parseKeelStatus('   \n  \n  '), null);
+  });
+
+  test('returns null for null input', () => {
+    assert.strictEqual(parseKeelStatus(null), null);
+  });
+
+  test('returns null for undefined input', () => {
+    assert.strictEqual(parseKeelStatus(undefined), null);
+  });
+
+  test('extracts goal section', () => {
+    const content = '## Goal\nBuild the API layer\n';
+    const result = parseKeelStatus(content);
+    assert.strictEqual(result.goal, 'Build the API layer');
+  });
+
+  test('extracts all four sections', () => {
+    const content = [
+      '## Goal',
+      'Ship v2.0',
+      '## Phase',
+      'Phase 3: API',
+      '## Blockers',
+      'Waiting on auth module',
+      '## Alerts',
+      'Drift detected in schema',
+    ].join('\n');
+    const result = parseKeelStatus(content);
+    assert.strictEqual(result.goal, 'Ship v2.0');
+    assert.strictEqual(result.phase, 'Phase 3: API');
+    assert.strictEqual(result.blockers, 'Waiting on auth module');
+    assert.strictEqual(result.alerts, 'Drift detected in schema');
+  });
+
+  test('handles singular and plural Blocker/Blockers', () => {
+    const singular = '## Blocker\nOne blocker\n';
+    const plural = '## Blockers\nTwo blockers\n';
+    assert.strictEqual(parseKeelStatus(singular).blockers, 'One blocker');
+    assert.strictEqual(parseKeelStatus(plural).blockers, 'Two blockers');
+  });
+
+  test('handles singular and plural Alert/Alerts', () => {
+    const singular = '## Alert\nOne alert\n';
+    const plural = '## Alerts\nTwo alerts\n';
+    assert.strictEqual(parseKeelStatus(singular).alerts, 'One alert');
+    assert.strictEqual(parseKeelStatus(plural).alerts, 'Two alerts');
+  });
+
+  test('returns null for content with no recognized sections', () => {
+    const content = 'Just some random text\nwith no headers\n';
+    assert.strictEqual(parseKeelStatus(content), null);
+  });
+
+  test('handles single-hash headers', () => {
+    const content = '# Goal\nSingle hash goal\n';
+    const result = parseKeelStatus(content);
+    assert.strictEqual(result.goal, 'Single hash goal');
+  });
+});
+
+describe('detectKeel', () => {
+  const { detectKeel } = require('../get-shit-done/bin/lib/init.cjs');
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('returns keel_installed false when .keel directory does not exist', () => {
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, false);
+    assert.strictEqual(result.keel_status, undefined);
+  });
+
+  test('returns keel_installed true with null status when .keel exists but no KEEL-STATUS.md', () => {
+    fs.mkdirSync(path.join(tmpDir, '.keel'), { recursive: true });
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, true);
+    assert.strictEqual(result.keel_status, null);
+  });
+
+  test('returns keel_installed true with parsed status when KEEL-STATUS.md exists', () => {
+    fs.mkdirSync(path.join(tmpDir, '.keel'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'KEEL-STATUS.md'),
+      '## Goal\nShip v2.0\n## Phase\nPhase 3\n'
+    );
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, true);
+    assert.strictEqual(result.keel_status.goal, 'Ship v2.0');
+    assert.strictEqual(result.keel_status.phase, 'Phase 3');
+  });
+
+  test('returns null keel_status when KEEL-STATUS.md is empty', () => {
+    fs.mkdirSync(path.join(tmpDir, '.keel'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'KEEL-STATUS.md'), '');
+    const result = detectKeel(tmpDir);
+    assert.strictEqual(result.keel_installed, true);
+    assert.strictEqual(result.keel_status, null);
+  });
+});

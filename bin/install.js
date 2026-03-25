@@ -4551,9 +4551,19 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (runtime === 'copilot') command = '/gsd-new-project';
   if (runtime === 'antigravity') command = '/gsd-new-project';
   if (runtime === 'cursor') command = 'gsd-new-project (mention the skill name)';
+
+  // KEEL discovery note
+  let keelNote = '';
+  try {
+    require('child_process').execSync('command -v keel', { stdio: 'ignore' });
+    keelNote = `\n  ${cyan}KEEL${reset} is already installed — drift protection will be offered during project setup.\n`;
+  } catch {
+    keelNote = `\n  ${dim}Optional:${reset} KEEL adds real-time drift protection that runs alongside GSD.\n  Install: ${cyan}brew install keel${reset}  (or https://getkeel.dev)\n`;
+  }
+
   console.log(`
   ${green}Done!${reset} Open a blank directory in ${program} and run ${cyan}${command}${reset}.
-
+${keelNote}
   ${cyan}Join the community:${reset} https://discord.gg/gsd
 `);
 }

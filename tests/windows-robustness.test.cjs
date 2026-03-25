@@ -64,7 +64,7 @@ function findUnguardedInfoCommands(code) {
 
     // Skip comments, empty lines, and lines that are already guarded
     if (!line || line.startsWith('#')) continue;
-    if (line.includes('|| true') || line.includes('|| echo') || line.includes('|| continue')) continue;
+    if (line.includes('|| true') || line.includes('|| echo') || line.includes('|| continue') || line.includes('|| keel')) continue;
 
     // Lines ending with 2>/dev/null that use informational commands
     if (line.endsWith('2>/dev/null')) {

@@ -73,6 +73,27 @@ process.stdin.on('end', () => {
       process.exit(0); // No GSD project — don't guard
     }
 
+    // Check KEEL drift alerts if KEEL is installed
+    // Reads .keel/session/alerts.yaml for scope-aware drift warnings
+    let keelDriftWarning = '';
+    const keelAlertsPath = path.join(cwd, '.keel', 'session', 'alerts.yaml');
+    if (fs.existsSync(keelAlertsPath)) {
+      try {
+        const alertsContent = fs.readFileSync(keelAlertsPath, 'utf-8');
+        // Check if the file being edited is mentioned in alerts
+        if (alertsContent && filePath) {
+          const relPath = path.relative(cwd, filePath);
+          const baseName = path.basename(filePath);
+          // Prefer full relative path match; fall back to basename for alerts without path separators
+          const matched = alertsContent.includes(relPath) ||
+            (!relPath.includes(path.sep) && alertsContent.includes(baseName));
+          if (matched) {
+            keelDriftWarning = ` KEEL drift alert: file may be outside active plan scope.`;
+          }
+        }
+      } catch (e) { /* ignore read errors */ }
+    }
+
     // If we get here: GSD project, guard enabled, file edit outside .planning/,
     // not in a subagent context. Inject advisory warning.
     const output = {
@@ -82,7 +103,8 @@ process.stdin.on('end', () => {
           'This edit will not be tracked in STATE.md or produce a SUMMARY.md. ' +
           'Consider using /gsd:fast for trivial fixes or /gsd:quick for larger changes ' +
           'to maintain project state tracking. ' +
-          'If this is intentional (e.g., user explicitly asked for a direct edit), proceed normally.'
+          'If this is intentional (e.g., user explicitly asked for a direct edit), proceed normally.' +
+          keelDriftWarning
       }
     };
 

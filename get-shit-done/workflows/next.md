@@ -17,6 +17,12 @@ Read project state to determine current position:
 node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state json 2>/dev/null || echo "{}"
 ```
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
+
 Also read:
 - `.planning/STATE.md` — current phase, progress, plan counts
 - `.planning/ROADMAP.md` — milestone structure and phase list

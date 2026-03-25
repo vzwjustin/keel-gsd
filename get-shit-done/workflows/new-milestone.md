@@ -141,6 +141,13 @@ Delete MILESTONE-CONTEXT.md if exists (consumed).
 node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
 ```
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel scan 2>/dev/null
+  keel goal 2>/dev/null
+fi
+```
+
 ## 7. Load Context and Resolve Models
 
 ```bash

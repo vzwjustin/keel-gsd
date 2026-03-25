@@ -37,7 +37,47 @@ function withProjectRoot(cwd, result) {
   const agentStatus = checkAgentsInstalled();
   result.agents_installed = agentStatus.agents_installed;
   result.missing_agents = agentStatus.missing_agents;
+  // Inject KEEL state into all init outputs so workflows can check
+  // keel_installed and keel_status without independent shell checks.
+  const keelState = detectKeel(cwd);
+  Object.assign(result, keelState);
   return result;
+}
+
+/**
+ * Parse KEEL-STATUS.md content into structured fields.
+ * Returns null for empty/malformed content.
+ */
+function parseKeelStatus(content) {
+  if (!content || !content.trim()) return null;
+  const result = {};
+  const goalMatch = content.match(/##?\s*Goal\s*\n([\s\S]*?)(?=\n##?\s|\n$|$)/i);
+  if (goalMatch) result.goal = goalMatch[1].trim();
+  const phaseMatch = content.match(/##?\s*Phase\s*\n([\s\S]*?)(?=\n##?\s|\n$|$)/i);
+  if (phaseMatch) result.phase = phaseMatch[1].trim();
+  const blockersMatch = content.match(/##?\s*Blockers?\s*\n([\s\S]*?)(?=\n##?\s|\n$|$)/i);
+  if (blockersMatch) result.blockers = blockersMatch[1].trim();
+  const alertsMatch = content.match(/##?\s*Alerts?\s*\n([\s\S]*?)(?=\n##?\s|\n$|$)/i);
+  if (alertsMatch) result.alerts = alertsMatch[1].trim();
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Detect KEEL installation and read KEEL-STATUS.md if available.
+ * Returns { keel_installed: false } when .keel directory is absent,
+ * or { keel_installed: true, keel_status: <parsed|null> } when present.
+ */
+function detectKeel(cwd) {
+  const keelDir = path.join(cwd, '.keel');
+  if (!fs.existsSync(keelDir)) return { keel_installed: false };
+  const statusPath = path.join(cwd, '.planning', 'KEEL-STATUS.md');
+  let keelStatus = null;
+  if (fs.existsSync(statusPath)) {
+    try {
+      keelStatus = parseKeelStatus(fs.readFileSync(statusPath, 'utf-8'));
+    } catch (e) { /* ignore read errors */ }
+  }
+  return { keel_installed: true, keel_status: keelStatus };
 }
 
 function cmdInitExecutePhase(cwd, phase, raw) {
@@ -1437,6 +1477,8 @@ module.exports = {
   cmdInitListWorkspaces,
   cmdInitRemoveWorkspace,
   detectChildRepos,
+  detectKeel,
+  parseKeelStatus,
   buildAgentSkillsBlock,
   cmdAgentSkills,
 };

@@ -36,6 +36,43 @@ if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
   keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
 fi
 ```
+
+**KEEL brownfield offer (if binary present but repo not initialized):**
+```bash
+if command -v keel >/dev/null 2>&1 && [ ! -d ".keel" ]; then
+  # Binary present but repo not initialized — offer to add KEEL
+fi
+```
+
+Use AskUserQuestion:
+- header: "KEEL"
+- question: "KEEL isn't set up for this repo yet. It watches for scope drift and can be added to existing projects. Add drift protection now?"
+- options:
+  - "Add KEEL" — Initialize drift protection for this project
+  - "Skip" — Continue without KEEL
+
+**If "Add KEEL":**
+```bash
+keel install 2>/dev/null || (keel init 2>/dev/null && keel scan 2>/dev/null && keel companion start 2>/dev/null)
+```
+If `.keel/` is still absent after the command, surface this advisory and continue:
+```
+⚠ KEEL could not be initialized — continuing without drift protection.
+```
+
+**If "Skip":** Continue to load_state immediately.
+
+**Surface KEEL status if available:**
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  if [ -n "$KEEL_STATUS" ]; then
+    echo "--- KEEL Status ---"
+    echo "$KEEL_STATUS"
+    echo "---"
+  fi
+fi
+```
 </step>
 
 <step name="load_state">

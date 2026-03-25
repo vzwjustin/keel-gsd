@@ -32,6 +32,12 @@ INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" init milestone-op)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
+
 Parse JSON for: `milestone_version`, `milestone_name`, `phase_count`, `completed_phases`, `roadmap_exists`, `state_exists`, `commit_docs`.
 
 **If `roadmap_exists` is false:** Error — "No ROADMAP.md found. Run `/gsd:new-milestone` first."
@@ -234,6 +240,14 @@ Skill(skill="gsd:execute-phase", args="${PHASE_NUM} --no-transition")
 ```
 
 **3d. Post-Execution Routing**
+
+Before reading verification results, run KEEL drift check:
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel drift 2>/dev/null
+fi
+```
 
 After execute-phase returns, read the verification result:
 
@@ -615,7 +629,15 @@ Decisions captured: {count} across {area_count} areas
 
 ## 4. Iterate
 
-After each phase completes, re-read ROADMAP.md to catch phases inserted mid-execution (decimal phases like 5.1):
+After each phase completes, checkpoint KEEL state before moving to the next phase:
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel checkpoint 2>/dev/null
+fi
+```
+
+Re-read ROADMAP.md to catch phases inserted mid-execution (decimal phases like 5.1):
 
 ```bash
 ROADMAP=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" roadmap analyze)
@@ -736,6 +758,15 @@ Skill(skill="gsd:cleanup")
 Cleanup shows its own dry-run and asks user for approval internally — this is an acceptable pause per CTRL-01 since it's an explicit decision about file deletion.
 
 **5d. Final Completion**
+
+Checkpoint KEEL state and stop the companion at the end of the autonomous lifecycle:
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel checkpoint 2>/dev/null
+  keel companion stop 2>/dev/null
+fi
+```
 
 Display final completion banner:
 

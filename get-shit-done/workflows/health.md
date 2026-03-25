@@ -37,6 +37,21 @@ Parse JSON output:
 - `repairs_performed[]`: Actions taken if --repair was used
 </step>
 
+<step name="keel_status_check">
+**Surface KEEL state awareness if available:**
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  KEEL_STATUS=$(cat .planning/KEEL-STATUS.md 2>/dev/null || echo "")
+  if [ -n "$KEEL_STATUS" ]; then
+    echo "--- KEEL Status ---"
+    echo "$KEEL_STATUS"
+    echo "---"
+  fi
+fi
+```
+</step>
+
 <step name="format_output">
 **Format and display results:**
 

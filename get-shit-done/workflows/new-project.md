@@ -76,12 +76,41 @@ git init
 
 **KEEL guardrail bootstrap (fire-and-forget):**
 ```bash
+# Bootstrap guard: .keel/ doesn't exist yet, so we check binary only (not [ -d ".keel" ])
 if command -v keel >/dev/null 2>&1; then
   keel init 2>/dev/null
   keel scan 2>/dev/null
   keel companion start 2>/dev/null
 fi
 ```
+
+**KEEL drift protection offer (greenfield):**
+
+```bash
+if command -v keel >/dev/null 2>&1 && [ ! -d ".keel" ]; then
+  # Bootstrap ran but .keel/ wasn't created — offer manual setup
+fi
+```
+
+Use AskUserQuestion:
+- header: "KEEL"
+- question: "KEEL watches for scope drift and blocks phase completion until reality matches intent. Enable it for this project?"
+- options:
+  - "Enable KEEL" — Initialize drift protection now (recommended)
+  - "Skip for now" — Continue without KEEL
+
+**If "Enable KEEL":**
+```bash
+keel install 2>/dev/null || (keel init 2>/dev/null && keel scan 2>/dev/null && keel companion start 2>/dev/null)
+```
+Then check if initialization succeeded:
+```bash
+if [ ! -d ".keel" ]; then
+  echo "⚠ KEEL could not be initialized — continuing without drift protection."
+fi
+```
+
+**If "Skip for now":** Continue to Step 2 immediately.
 
 ## 2. Brownfield Offer
 
