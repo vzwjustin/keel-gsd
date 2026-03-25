@@ -64,6 +64,39 @@ function isProcessAlive(pid) {
   }
 }
 
+// ─── killOrphanDaemons ────────────────────────────────────────────────────────
+
+/**
+ * Find and kill any orphan keel daemon processes for this cwd.
+ * Uses process list to find node processes running keel.js --daemon.
+ * Skips the current process (if we are a daemon).
+ * @param {string} cwd
+ * @param {number|null} keepPid - PID to keep alive (null = kill all)
+ */
+function killOrphanDaemons(cwd, keepPid) {
+  try {
+    const { execSync } = require('child_process');
+    // Find all node processes with --daemon flag running keel.js
+    const output = execSync('ps aux', { encoding: 'utf8', timeout: 3000 });
+    const lines = output.split('\n');
+    for (const line of lines) {
+      if (!line.includes('keel.js') || !line.includes('--daemon')) continue;
+      // Extract PID (second column in ps aux output)
+      const parts = line.trim().split(/\s+/);
+      const pid = parseInt(parts[1], 10);
+      if (!pid || pid === process.pid) continue;
+      if (keepPid && pid === keepPid) continue;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // Already dead
+      }
+    }
+  } catch {
+    // ps not available or timed out — skip orphan cleanup
+  }
+}
+
 // ─── startDaemon ─────────────────────────────────────────────────────────────
 
 /**
@@ -85,9 +118,13 @@ function startDaemon(cwd) {
   // Requirement 1.2: idempotent — check if already running
   const heartbeat = readHeartbeat(cwd);
   if (heartbeat && heartbeat.pid && isProcessAlive(heartbeat.pid)) {
-    // Already running — exit 0 silently
+    // Already running — kill any orphans and return
+    killOrphanDaemons(cwd, heartbeat.pid);
     return;
   }
+
+  // Kill any orphan daemon processes before spawning a new one
+  killOrphanDaemons(cwd, null);
 
   // Spawn detached child process
   const child = spawn(process.execPath, [keelJsPath, '--daemon'], {
@@ -129,14 +166,16 @@ async function stopDaemon(cwd) {
   const heartbeat = readHeartbeat(cwd);
 
   if (!heartbeat || !heartbeat.pid) {
-    // No PID — nothing to stop
+    // No PID in heartbeat — still kill any orphan daemons
+    killOrphanDaemons(cwd, null);
     return;
   }
 
   const pid = heartbeat.pid;
 
   if (!isProcessAlive(pid)) {
-    // Process already gone — update heartbeat and return
+    // Process already gone — kill orphans, update heartbeat and return
+    killOrphanDaemons(cwd, null);
     writeHeartbeat(cwd, Object.assign({}, heartbeat, { running: false }));
     return;
   }
@@ -154,6 +193,9 @@ async function stopDaemon(cwd) {
     if (!isProcessAlive(pid)) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
+
+  // Kill any orphan daemons that aren't the one we just stopped
+  killOrphanDaemons(cwd, null);
 
   // Write running: false to heartbeat (Requirement 2.3: preserve last_beat_at)
   const updated = Object.assign({}, heartbeat, { running: false });
