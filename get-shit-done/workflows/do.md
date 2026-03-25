@@ -32,14 +32,8 @@ INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state load 2>/dev/nu
 keel_installed="false"
 if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
 
-# Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
-if [ "$keel_installed" = "true" ]; then
-  if [ ! -d ".keel" ]; then
-    keel install 2>/dev/null
-  else
-    keel companion start 2>/dev/null
-  fi
-fi
+# KEEL: read-only — do not start companion for routing workflows.
+# Companion is started by execute-phase when actual work begins.
 ```
 
 Track whether `.planning/` exists — some routes require it, others don't.

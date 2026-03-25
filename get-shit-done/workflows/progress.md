@@ -17,14 +17,8 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
 ```bash
-# Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
-if [ "$keel_installed" = "true" ]; then
-  if [ ! -d ".keel" ]; then
-    keel install 2>/dev/null
-  else
-    keel companion start 2>/dev/null
-  fi
-fi
+# KEEL: read-only — do not start companion for status/progress workflows.
+# Companion is started by execute-phase when actual work begins.
 ```
 
 Extract from init JSON: `project_exists`, `roadmap_exists`, `state_exists`, `phases`, `current_phase`, `next_phase`, `milestone_version`, `completed_count`, `phase_count`, `paused_at`, `state_path`, `roadmap_path`, `project_path`, `config_path`, `keel_installed`.
