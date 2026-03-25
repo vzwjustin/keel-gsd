@@ -64,10 +64,22 @@ function parseKeelStatus(content) {
 
 /**
  * Detect KEEL installation and read KEEL-STATUS.md if available.
- * Returns { keel_installed: false } when .keel directory is absent,
- * or { keel_installed: true, keel_status: <parsed|null> } when present.
+ * Returns { keel_installed: false } when the keel binary is absent OR
+ * the .keel directory doesn't exist.
+ * Returns { keel_installed: true, keel_status: <parsed|null> } only when
+ * both the binary is present (verified via `which keel`) AND .keel/ exists.
+ *
+ * Checking the binary prevents false positives when .keel/ exists from a
+ * previous install but the binary is no longer on PATH — every keel command
+ * would fail with ENOENT, breaking companion start and all guardrail blocks.
  */
 function detectKeel(cwd) {
+  // Check binary first — directory presence alone is not sufficient
+  try {
+    execSync('which keel', { stdio: 'ignore' });
+  } catch {
+    return { keel_installed: false };
+  }
   const keelDir = path.join(cwd, '.keel');
   if (!fs.existsSync(keelDir)) return { keel_installed: false };
   const statusPath = path.join(cwd, '.planning', 'KEEL-STATUS.md');
