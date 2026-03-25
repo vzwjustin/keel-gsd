@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 // ─── Resolve lib modules lazily to avoid circular issues ─────────────────────
 
@@ -444,7 +445,12 @@ async function runInstall(flags) {
 
     if (flags.link) {
       const binSrc = path.resolve(__filename);
-      const targets = ['/usr/local/bin/keel', path.join(process.env.HOME || '~', 'bin', 'keel')];
+      const home = process.env.HOME || os.homedir();
+      const targets = [
+        '/usr/local/bin/keel',
+        path.join(home, '.local', 'bin', 'keel'),
+        path.join(home, 'bin', 'keel'),
+      ];
       let linked = false;
       for (const target of targets) {
         try {
@@ -457,7 +463,7 @@ async function runInstall(flags) {
         } catch { /* try next */ }
       }
       if (!linked) {
-        die('Could not create symlink in /usr/local/bin or ~/bin — check permissions', 1);
+        die('Could not create symlink in /usr/local/bin, ~/.local/bin, or ~/bin — check permissions', 1);
       }
       process.exit(0);
     }
