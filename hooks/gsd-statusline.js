@@ -74,12 +74,56 @@ process.stdin.on('end', () => {
       } catch (e) {}
     }
 
+    // KEEL companion + drift state
+    let keelState = '';
+    try {
+      const keelDir = path.join(dir, '.keel', 'session');
+      const heartbeatFile = path.join(keelDir, 'companion-heartbeat.yaml');
+      const alertsFile = path.join(keelDir, 'alerts.yaml');
+
+      if (fs.existsSync(heartbeatFile)) {
+        const heartbeat = fs.readFileSync(heartbeatFile, 'utf8');
+        const aliveMatch = heartbeat.match(/running:\s*(true|false)/);
+        const tsMatch = heartbeat.match(/last_beat_at:\s*['"]?([^'"\n]+)/);
+        const alive = aliveMatch && aliveMatch[1] === 'true';
+
+        let stale = false;
+        if (tsMatch) {
+          const age = (Date.now() - new Date(tsMatch[1].trim()).getTime()) / 1000;
+          stale = age > 30;
+        }
+
+        let alertCount = 0;
+        let hasDeterministic = false;
+        if (fs.existsSync(alertsFile)) {
+          const alertsText = fs.readFileSync(alertsFile, 'utf8');
+          const matches = alertsText.match(/- rule:/g);
+          alertCount = matches ? matches.length : 0;
+          hasDeterministic = alertsText.includes('deterministic');
+        }
+
+        if (alive && !stale) {
+          if (alertCount === 0) {
+            keelState = ' │ \x1b[32m⚓ clean\x1b[0m';
+          } else if (hasDeterministic) {
+            keelState = ` │ \x1b[31m⚓ ${alertCount} drift\x1b[0m`;
+          } else {
+            keelState = ` │ \x1b[33m⚓ ${alertCount} warn\x1b[0m`;
+          }
+        } else if (alive && stale) {
+          keelState = ' │ \x1b[2m⚓ stale\x1b[0m';
+        } else {
+          keelState = ' │ \x1b[2m⚓ off\x1b[0m';
+        }
+      }
+    } catch (e) {}
+
     // Output
     const dirname = path.basename(dir);
     if (task) {
-      process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[1m${task}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}`);
+      process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[1m${task}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}${keelState}`);
     } else {
-      process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}`);
+      process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}${keelState}`);
     }
   } catch (e) {
     // Silent fail - don't break statusline on parse errors
