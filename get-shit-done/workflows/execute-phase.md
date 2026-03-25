@@ -162,6 +162,14 @@ Report: "Found {plan_count} plans in {phase_dir} ({incomplete_count} incomplete)
 node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
+
+**KEEL guardrail (fire-and-forget):**
+```bash
+if command -v keel >/dev/null 2>&1; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+  keel checkpoint 2>/dev/null
+fi
+```
 </step>
 
 <step name="discover_and_group_plans">
@@ -750,6 +758,15 @@ node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(phase-{X}): ev
 ```
 
 **Skip this step if** `.planning/PROJECT.md` does not exist.
+</step>
+
+<step name="keel_phase_close">
+**KEEL guardrail (fire-and-forget):**
+```bash
+if command -v keel >/dev/null 2>&1; then
+  keel checkpoint 2>/dev/null
+fi
+```
 </step>
 
 <step name="offer_next">

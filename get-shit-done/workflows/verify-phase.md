@@ -198,6 +198,21 @@ Categorize: 🛑 Blocker (prevents goal) | ⚠️ Warning (incomplete) | ℹ️ 
 Format each as: Test Name → What to do → Expected result → Why can't verify programmatically.
 </step>
 
+<step name="keel_done_gate">
+**KEEL guardrail (advisory):**
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  KEEL_DONE=$(keel --json done 2>/dev/null)
+  if echo "$KEEL_DONE" | grep -q '"passed": false'; then
+    echo "KEEL done-gate: BLOCKED — drift unresolved"
+    echo "$KEEL_DONE" | grep -o '"reason": "[^"]*"' | head -3
+  fi
+fi
+```
+If KEEL blocks, include the reason in the verification report as an additional gap.
+KEEL failures do not override the GSD status — they surface as advisory warnings.
+</step>
+
 <step name="determine_status">
 **passed:** All truths VERIFIED, all artifacts pass levels 1-3, all key links WIRED, no blocker anti-patterns.
 

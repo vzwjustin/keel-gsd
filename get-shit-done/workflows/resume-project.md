@@ -29,6 +29,13 @@ Parse JSON for: `state_exists`, `roadmap_exists`, `project_exists`, `planning_ex
 **If `state_exists` is true:** Proceed to load_state
 **If `state_exists` is false but `roadmap_exists` or `project_exists` is true:** Offer to reconstruct STATE.md
 **If `planning_exists` is false:** This is a new project - route to /gsd:new-project
+
+**KEEL companion restart (fire-and-forget):**
+```bash
+if command -v keel >/dev/null 2>&1 && [ -d ".keel" ]; then
+  keel companion status 2>/dev/null | grep -q "running" || keel companion start 2>/dev/null
+fi
+```
 </step>
 
 <step name="load_state">

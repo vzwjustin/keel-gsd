@@ -74,6 +74,15 @@ Parse JSON for: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `co
 git init
 ```
 
+**KEEL guardrail bootstrap (fire-and-forget):**
+```bash
+if command -v keel >/dev/null 2>&1; then
+  keel init 2>/dev/null
+  keel scan 2>/dev/null
+  keel companion start 2>/dev/null
+fi
+```
+
 ## 2. Brownfield Offer
 
 **If auto mode:** Skip to Step 4 (assume greenfield, synthesize PROJECT.md from provided document).
