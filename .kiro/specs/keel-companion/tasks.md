@@ -15,11 +15,11 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 2.4, 3.3_
   - _Design: `yaml.js`, `atomic.js` component interfaces_
 
-  - [ ]* 1.1 Write unit tests for `yaml.js` round-trip
+  - [x] 1.1 Write unit tests for `yaml.js` round-trip
     - Test parse → stringify → parse identity for all YAML shapes used in state files (heartbeat, alerts, checkpoint, scope, goal, keel.yaml)
     - _Requirements: 2.1, 3.1_
 
-  - [ ]* 1.2 Write unit tests for `atomic.js`
+  - [x] 1.2 Write unit tests for `atomic.js`
     - Verify temp file is cleaned up on success
     - Verify no partial file is observable when write is interrupted
     - _Requirements: 2.4, 3.3_
@@ -34,22 +34,22 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 3.1, 3.2, 3.3, 3.5, 4.1, 4.2, 4.3, 5.1, 5.2, 5.3_
   - _Design: `alerts.js` component interface, Consolidation Algorithm, Auto-Clear Mechanism_
 
-  - [ ]* 2.1 Write property test for P1 — Alert Consolidation Invariant
+  - [x] 2.1 Write property test for P1 — Alert Consolidation Invariant
     - **Property P1: For any N alerts sharing a `cluster_id` within a 10s window, `consolidateAlerts` returns exactly 1 entry with `consolidated: true` and `child_count == N`**
     - **Validates: Requirements 4.1, 4.2, 4.6**
     - Use `fc.array(alertArbitrary(), { minLength: 2, maxLength: 10 })` with all alerts mapped to the same `cluster_id`
 
-  - [ ]* 2.2 Write property test for P2 — Staleness Invariant
+  - [x] 2.2 Write property test for P2 — Staleness Invariant
     - **Property P2: After toggling any alert's source condition to false and running one watch cycle, no alert with a false condition remains in `alerts.yaml`**
     - **Validates: Requirements 5.1, 5.5**
     - Generate arbitrary alert sets; randomly toggle conditions; assert cleared alerts are absent from output and present in history
 
-  - [ ]* 2.3 Write property test for P6 — Alert History Completeness
+  - [x] 2.3 Write property test for P6 — Alert History Completeness
     - **Property P6: Every alert removed from `alerts.yaml` appears in `alert-history.yaml` with a valid `cleared_at` ISO 8601 timestamp and `cleared_reason ∈ { "auto", "advance", "checkpoint" }`**
     - **Validates: Requirements 5.3**
     - Trigger clearing via auto/advance/checkpoint paths; assert every removed alert has a corresponding history entry
 
-  - [ ]* 2.4 Write unit tests for `alerts.js`
+  - [x] 2.4 Write unit tests for `alerts.js`
     - `consolidateAlerts`: 1 alert (no consolidation), 2 alerts same cluster, 2 alerts different clusters, window boundary (just inside / just outside 10s)
     - `ruleConditionHolds`: each of SCOPE-001, GOAL-001, VAL-004, STEP-001 with true and false conditions
     - _Requirements: 4.1, 4.2, 5.1, 5.2_
@@ -61,7 +61,7 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 6.1, 6.5, 7.3_
   - _Design: `checkpoint.js` component interface, Checkpoint Diffing algorithm_
 
-  - [ ]* 3.1 Write unit tests for `checkpoint.js`
+  - [x] 3.1 Write unit tests for `checkpoint.js`
     - `computeDrift`: clean state (no drift), single out-of-scope file, goal text drift > 20%, VAL-004 present
     - `loadLatestCheckpoint`: empty directory returns null, multiple checkpoints returns most recent
     - _Requirements: 6.1, 6.2, 6.4_
@@ -82,22 +82,22 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2.1, 2.2, 2.3, 2.4, 8.4_
   - _Design: Daemon Model, PID File and Idempotency, Stop Sequence, Watch Cycle algorithm_
 
-  - [ ]* 5.1 Write property test for P4 — Idempotent Start
+  - [x] 5.1 Write property test for P4 — Idempotent Start
     - **Property P4: Calling `startDaemon(cwd)` N times (1–5) results in exactly one running daemon process**
     - **Validates: Requirements 1.2**
     - Use `fc.integer({ min: 1, max: 5 })` for call count; assert process count == 1 after all calls
 
-  - [ ]* 5.2 Write property test for P7 — Heartbeat Monotonicity
+  - [x] 5.2 Write property test for P7 — Heartbeat Monotonicity
     - **Property P7: `last_beat_at` in the heartbeat file is non-decreasing across successive writes**
     - **Validates: Requirements 1.6, 2.2**
     - Simulate N heartbeat writes with arbitrary clock values; assert each successive timestamp ≥ previous
 
-  - [ ]* 5.3 Write property test for P3 — Atomic Write Integrity
+  - [x] 5.3 Write property test for P3 — Atomic Write Integrity
     - **Property P3: Every read of `companion-heartbeat.yaml` or `alerts.yaml` during a concurrent `writeAtomic` either parses successfully or returns the previous valid content — never a partial/corrupt state**
     - **Validates: Requirements 2.4, 3.3**
     - Run `writeAtomic` while reading in a tight loop; assert every read result is valid parseable YAML
 
-  - [ ]* 5.4 Write unit tests for `daemon.js`
+  - [x] 5.4 Write unit tests for `daemon.js`
     - `getStatus`: absent heartbeat file, `running: true` fresh, `running: true` stale (>30s), `running: false`
     - `startDaemon`: throws when `.keel/` absent
     - _Requirements: 1.5, 1.7, 1.8_
@@ -128,7 +128,7 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 10.2_
   - _Design: `keel install` Sequence, PATH Installation_
 
-  - [ ]* 9.1 Write unit tests for `keel init` and `keel install`
+  - [x] 9.1 Write unit tests for `keel init` and `keel install`
     - `keel init`: creates expected directory structure and `keel.yaml` with correct defaults
     - `keel install`: idempotent when `.keel/` already exists; prints advisory
     - `keel install`: exits 1 with descriptive error on permission failure
@@ -142,12 +142,12 @@ All code lives under `keel/bin/` with lib modules in `keel/bin/lib/`. State file
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
   - _Design: Done-Gate algorithm, `keel advance` Sequence, Exit Codes_
 
-  - [ ]* 10.1 Write property test for P5 — Done-Gate Soundness
+  - [x] 10.1 Write property test for P5 — Done-Gate Soundness
     - **Property P5: `doneGate().passed == true` if and only if all 4 checks pass simultaneously**
     - **Validates: Requirements 7.1, 7.2, 7.3**
     - Generate all 16 combinations of the 4 boolean check states; assert `passed` equals the conjunction of all 4 conditions
 
-  - [ ]* 10.2 Write unit tests for `keel done`
+  - [x] 10.2 Write unit tests for `keel done`
     - Each of the 4 checks failing in isolation produces the correct blocker message and exit code
     - `--json` output matches `{ passed, reason, blockers }` schema
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_

@@ -434,6 +434,32 @@ function appendAlertHistory(cwd, clearedAlerts, clearedReason) {
   writeAtomic(filePath, stringifyYaml(combined));
 }
 
+// ─── filterStaleAlerts ────────────────────────────────────────────────────────
+
+/**
+ * Partition alerts into active and cleared based on a condition function.
+ * The conditionFn receives (rule, sourceFile) and returns true if the alert
+ * condition still holds (alert should remain active).
+ *
+ * This is the pure core of the auto-clear logic, extracted for testability.
+ *
+ * @param {object[]} alerts - current alerts array
+ * @param {function} conditionFn - (rule: string, sourceFile: string|null) => boolean
+ * @returns {{ active: object[], cleared: object[] }}
+ */
+function filterStaleAlerts(alerts, conditionFn) {
+  const active = [];
+  const cleared = [];
+  for (const alert of alerts) {
+    if (conditionFn(alert.rule, alert.source_file)) {
+      active.push(alert);
+    } else {
+      cleared.push(alert);
+    }
+  }
+  return { active, cleared };
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -443,6 +469,7 @@ module.exports = {
   ruleConditionHolds,
   consolidateAlerts,
   appendAlertHistory,
+  filterStaleAlerts,
   // Exported for testing
   levenshtein,
   levenshteinRatio,

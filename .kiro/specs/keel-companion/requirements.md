@@ -4,6 +4,8 @@
 
 The keel companion is a CLI binary that provides real-time anti-drift guardrails for GSD-managed repositories. It runs as a background process alongside GSD phases, watching for scope drift — files touched outside the active plan step, goal statement drift, scope expansion — and surfaces alerts before they compound. The companion writes structured state files that GSD hooks and workflows read to display status and inject drift warnings into agent context.
 
+GSD fully orchestrates the keel lifecycle. Keel runs silently underneath GSD — it starts automatically when GSD phases begin, stops when they end, and surfaces drift data through `.planning/KEEL-STATUS.md` and `.keel/session/` state files. Users never need to invoke keel directly; GSD handles all companion lifecycle management transparently.
+
 This spec covers the companion binary itself: its process lifecycle, drift detection engine, alert management, file output contracts, and the full command surface (`keel companion start/stop/status`, `keel checkpoint`, `keel drift`, `keel done`, `keel goal`, `keel scan`, `keel advance`, `keel install`, `keel init`, `keel watch`).
 
 Key retro findings that shape these requirements:
@@ -11,6 +13,7 @@ Key retro findings that shape these requirements:
 - Stale alerts: alerts persisted after their source condition resolved — auto-clear is required
 - Companion start UX broke when the binary was absent — graceful fallback is required
 - Binary detection was checking `.keel/` directory presence instead of actual binary — already fixed on the GSD side
+- Statusline showing "keel unavailable" when companion should be running — GSD must own the full lifecycle
 
 ## Glossary
 
@@ -29,12 +32,14 @@ Key retro findings that shape these requirements:
 - **Alert_Engine**: The internal subsystem that evaluates drift rules and produces alerts
 - **Checkpoint_Store**: The `.keel/checkpoints/` directory containing checkpoint snapshots
 - **Session_Dir**: The `.keel/session/` directory containing live session state files
+- **GSD_Workflow**: Any GSD command or workflow that invokes keel as part of its execution
+- **GSD_Init**: The `gsd-tools.cjs init` call that returns the JSON context block consumed by GSD workflows
 
 ## Requirements
 
 ### Requirement 1: Companion Process Lifecycle
 
-**User Story:** As a GSD workflow, I want to start and stop the companion watcher reliably, so that drift detection is active during execution phases and cleanly shut down when work pauses.
+**User Story:** As a GSD workflow, I want to start and stop the companion watcher reliably, so that drift protection is always active during execution phases and cleanly shut down when work pauses.
 
 #### Acceptance Criteria
 
@@ -46,6 +51,8 @@ Key retro findings that shape these requirements:
 6. WHEN the Companion_Process is running, THE Companion_Process SHALL update `last_beat_at` in `.keel/session/companion-heartbeat.yaml` at least once every 15 seconds.
 7. IF the Companion_Process crashes or is killed externally, THEN THE Companion_Process SHALL NOT automatically restart — the stale heartbeat (age > 30s) signals the off state to GSD hooks.
 8. WHEN `keel companion start` is invoked AND `.keel/` does not exist in the current directory, THE Keel_Binary SHALL print a human-readable error message to stderr and exit with a non-zero code without creating partial state.
+9. WHEN `keel companion start` is invoked by a GSD workflow AND the Companion_Process starts successfully, THE Keel_Binary SHALL exit with code 0 and produce no output to stdout or stderr, so GSD workflows receive a clean signal.
+10. WHEN `keel companion stop` is invoked by a GSD workflow AND the stop completes (whether or not the process was running), THE Keel_Binary SHALL exit with code 0 and produce no output to stdout or stderr.
 
 ### Requirement 2: Heartbeat File Contract
 
@@ -60,6 +67,7 @@ Key retro findings that shape these requirements:
 5. WHILE the Companion_Process is running AND no alerts exist, THE `gsd-statusline.js` hook SHALL display `⚓ clean` in green.
 6. WHILE the Companion_Process is running AND one or more alerts exist with `deterministic: true`, THE `gsd-statusline.js` hook SHALL display `⚓ N drift` in red where N is the alert count.
 7. WHEN the heartbeat `last_beat_at` is more than 30 seconds old, THE `gsd-statusline.js` hook SHALL display `⚓ stale` in dim regardless of the `running` field value.
+8. WHEN the Keel_Binary is not on PATH or `.keel/` does not exist, THE `gsd-statusline.js` hook SHALL display no KEEL indicator rather than displaying `⚓ unavailable` or any error state.
 
 ### Requirement 3: Alert File Contract
 
@@ -149,6 +157,7 @@ Key retro findings that shape these requirements:
 4. IF `keel install` fails to create `.keel/` (e.g., permission error), THEN THE Keel_Binary SHALL print a descriptive error to stderr and exit with a non-zero code.
 5. WHEN `keel install` completes successfully, THE Keel_Binary SHALL print a confirmation message listing what was created and the next suggested command.
 6. WHERE the `keel` binary is not on PATH, THE GSD workflows SHALL suppress all keel command invocations silently via `2>/dev/null` and continue without drift protection.
+7. WHEN `keel install` is invoked, THE Keel_Binary SHALL add `.keel/session/` to `.gitignore` if not already present, so session state files are not committed to version control.
 
 ### Requirement 10: Graceful Fallback When Binary Is Absent
 
@@ -156,8 +165,79 @@ Key retro findings that shape these requirements:
 
 #### Acceptance Criteria
 
-1. WHEN `command -v keel` fails in any GSD workflow, THE GSD workflow SHALL skip all keel command blocks entirely without surfacing errors to the agent.
+1. WHEN `command -v keel` fails in any GSD workflow, THE GSD_Workflow SHALL skip all keel command blocks entirely without surfacing errors to the agent.
 2. WHEN `keel companion start` is invoked AND the binary is present but `.keel/` does not exist, THE Keel_Binary SHALL print a human-readable advisory to stderr (`keel not initialized — run keel install first`) and exit with a non-zero code.
 3. THE `init.cjs` KEEL detection function SHALL check for binary presence via `which keel` before checking for `.keel/` directory presence, and SHALL return `{ keel_installed: false }` when the binary is absent regardless of directory state.
-4. WHEN `keel_installed` is `false` in the GSD init JSON, THE GSD workflows SHALL treat all KEEL state as unavailable and display no KEEL status indicators.
+4. WHEN `keel_installed` is `false` in the GSD init JSON, THE GSD_Workflow SHALL treat all KEEL state as unavailable and display no KEEL status indicators.
 5. IF the companion heartbeat file exists but the `keel` binary is no longer on PATH, THEN THE `gsd-statusline.js` hook SHALL continue to display the last known state from the heartbeat file without attempting to invoke the binary.
+6. WHEN `keel_installed` is `false`, THE GSD_Init JSON SHALL include `"keel_installed": false` as a top-level field so all GSD workflows can gate keel blocks with a single JSON field check rather than re-running `command -v keel` inline.
+
+### Requirement 11: GSD Phase Lifecycle Integration
+
+**User Story:** As a GSD workflow, I want the keel companion to automatically start and stop in sync with GSD phase execution, so that drift protection is always active during phases without requiring manual companion management.
+
+#### Acceptance Criteria
+
+1. WHEN a GSD phase begins execution (via `execute-phase` or equivalent phase-start hook), THE GSD_Workflow SHALL invoke `keel companion start` before any phase work begins, using the `keel_installed` field from GSD_Init to gate the call.
+2. WHEN a GSD phase ends (via phase completion, `verify-work`, or equivalent phase-end hook), THE GSD_Workflow SHALL invoke `keel companion stop` after all phase work is complete.
+3. WHEN `keel companion start` is invoked by a GSD phase hook AND the Companion_Process is already running, THE Keel_Binary SHALL exit with code 0 without disrupting the running companion state.
+4. WHEN `keel companion stop` is invoked by a GSD phase hook AND no Companion_Process is running, THE Keel_Binary SHALL exit with code 0 without error.
+5. IF the `keel` binary is not on PATH when a GSD phase hook attempts to invoke it, THEN THE GSD_Workflow SHALL skip the companion lifecycle call silently and continue phase execution without drift protection.
+6. WHEN a GSD phase begins AND `keel companion start` succeeds, THE GSD_Workflow SHALL also invoke `keel checkpoint` to anchor the phase start state before any phase work begins.
+7. WHEN `keel_installed` is `true` in GSD_Init AND the Companion_Process is not running at phase start, THE GSD_Workflow SHALL invoke `keel companion start` unconditionally rather than checking `keel companion status` first — start is idempotent and the status check adds latency.
+8. WHEN a GSD workflow invokes any keel command, THE GSD_Workflow SHALL redirect both stdout and stderr to `/dev/null` (via `2>/dev/null`) unless the command output is explicitly consumed by the workflow logic, so keel never produces visible output during normal GSD operation.
+
+### Requirement 12: Drift Data Feedback into GSD Context
+
+**User Story:** As a GSD agent, I want keel drift data automatically surfaced in GSD planning files and agent context, so that I can see drift status without explicitly invoking keel commands during execution.
+
+#### Acceptance Criteria
+
+1. WHEN the Companion_Process detects a drift state change (new alert or alert cleared), THE Companion_Process SHALL refresh `.planning/KEEL-STATUS.md` within one watch cycle.
+2. WHEN a GSD workflow reads agent context files from `.planning/`, THE GSD_Workflow SHALL include the content of `.planning/KEEL-STATUS.md` in the agent context if the file exists and its `Last updated` timestamp is within 60 seconds.
+3. WHEN `keel companion start` is invoked AND `.planning/` exists, THE Keel_Binary SHALL write an initial `.planning/KEEL-STATUS.md` immediately (before the first watch cycle completes).
+4. WHEN the Companion_Process writes KEEL-STATUS.md AND one or more high-severity alerts are active, THE KEEL-STATUS.md SHALL include a `## ⚠ Drift Warning` section listing each blocker with its resolution action.
+5. IF `.planning/KEEL-STATUS.md` does not exist when a GSD workflow reads context, THEN THE GSD_Workflow SHALL proceed without KEEL context and SHALL NOT surface an error to the agent.
+6. WHEN `keel drift --json` is invoked by a GSD hook, THE Keel_Binary SHALL write the JSON output to `.keel/session/drift-report.json` in addition to stdout, so GSD hooks can read the last drift report without re-invoking keel.
+7. WHEN GSD_Init is called with `keel_installed: true`, THE GSD_Init response SHALL include a `keel_status` field containing the parsed content of `.keel/session/companion-heartbeat.yaml` (or `null` if absent), so GSD workflows have heartbeat state without a separate file read.
+
+### Requirement 13: GSD Command Blocking on High-Severity Drift
+
+**User Story:** As a GSD workflow, I want phase completion and milestone completion to be blocked when high-severity drift is detected, so that scope integrity is enforced at GSD workflow boundaries.
+
+#### Acceptance Criteria
+
+1. WHEN `verify-work` is invoked AND `keel done` exits with a non-zero code, THE GSD_Workflow SHALL surface the `keel done` blocker output to the agent and halt phase completion.
+2. WHEN `complete-milestone` is invoked AND `.keel/session/alerts.yaml` contains one or more alerts with `severity: high` AND `deterministic: true`, THE GSD_Workflow SHALL invoke `keel done` and block milestone completion if `keel done` exits non-zero.
+3. WHEN a GSD command is blocked by keel drift, THE GSD_Workflow SHALL print the specific keel blocker message and the resolution command (e.g., `keel advance` or `keel checkpoint`) before halting.
+4. IF the `keel` binary is not on PATH when `verify-work` or `complete-milestone` attempts a drift check, THEN THE GSD_Workflow SHALL skip the drift gate entirely and proceed without blocking.
+5. IF `.keel/session/alerts.yaml` does not exist or is empty when `verify-work` runs, THEN THE GSD_Workflow SHALL treat the drift gate as passed and proceed with phase completion.
+6. WHEN `keel done` blocks a GSD command AND the user resolves the drift (via `keel advance` or `keel checkpoint`), THE GSD_Workflow SHALL allow the blocked command to be re-invoked and complete successfully.
+
+### Requirement 14: Git Event Integration
+
+**User Story:** As a GSD agent, I want keel to respond to git events (branch switches and commits) so that checkpoint state stays anchored to the actual git context and context changes are detected automatically.
+
+#### Acceptance Criteria
+
+1. WHEN a git branch switch is detected (via `post-checkout` git hook or equivalent), THE Keel_Binary SHALL write a branch-switch alert to `.keel/session/alerts.yaml` with `rule: GIT-001` and `severity: medium` indicating a potential context change.
+2. WHEN a git commit is made AND the Companion_Process is running, THE Companion_Process SHALL automatically invoke the equivalent of `keel checkpoint` to anchor the committed state as the new drift baseline.
+3. WHEN a git branch switch is detected AND the new branch name matches the active GSD phase identifier (e.g., branch contains the phase number), THE Keel_Binary SHALL clear any existing GIT-001 alert and write a clean checkpoint for the new branch context.
+4. WHEN a git branch switch is detected AND the new branch does not match the active GSD phase identifier, THE Keel_Binary SHALL preserve the GIT-001 alert until the user explicitly acknowledges the context change via `keel checkpoint` or `keel advance`.
+5. WHEN `keel install` is invoked, THE Keel_Binary SHALL install git hooks (`post-checkout`, `post-commit`) into `.git/hooks/` that invoke the appropriate keel commands, skipping silently if `.git/` does not exist.
+6. IF a git hook invocation fails (e.g., keel binary not on PATH), THEN THE git hook script SHALL exit with code 0 to avoid blocking git operations.
+7. WHEN `keel drift` is invoked, THE Keel_Binary SHALL include the current git branch name and the branch at checkpoint time in the drift report, flagging a mismatch as a context warning.
+
+### Requirement 15: Claude Code CLI Compatibility
+
+**User Story:** As a developer using Claude Code CLI to run GSD workflows, I want keel to start and operate correctly within the Claude Code execution environment, so that drift protection works without any manual intervention.
+
+#### Acceptance Criteria
+
+1. WHEN a GSD workflow is executed inside Claude Code CLI AND `keel_installed` is `true`, THE GSD_Workflow SHALL invoke `keel companion start` as a fire-and-forget bash command (not as a blocking subprocess) so the companion daemon starts without blocking the Claude Code agent's execution.
+2. WHEN `keel companion start` forks the daemon process, THE Keel_Binary SHALL use `child_process.spawn` with `detached: true`, `stdio: 'ignore'`, and `child.unref()` so the daemon survives the parent process exiting and does not inherit Claude Code's stdio handles.
+3. WHEN the Companion_Process is running inside a Claude Code session AND Claude Code exits or is interrupted, THE Companion_Process SHALL continue running as an independent OS process until explicitly stopped via `keel companion stop`.
+4. WHEN GSD_Init is called from within a Claude Code workflow, THE GSD_Init response SHALL include `keel_installed` as a boolean derived from `which keel` resolution, not from `.keel/` directory presence, so the field is accurate in all Claude Code working directory contexts.
+5. WHEN a GSD workflow running in Claude Code invokes `keel companion start` AND the companion starts successfully, THE GSD_Workflow SHALL not wait for any confirmation output from keel — the exit code 0 is the only signal consumed.
+6. WHEN the `gsd-statusline.js` hook runs inside a Claude Code terminal AND the Companion_Process is running, THE hook SHALL read `.keel/session/companion-heartbeat.yaml` directly from disk rather than invoking `keel companion status`, so the statusline never shows `⚓ unavailable` due to a PATH resolution failure in the hook's execution context.
+7. WHEN `keel install` is invoked in a Claude Code project, THE Keel_Binary SHALL add the `keel/bin/keel.js` path to the project's PATH resolution (via `.env`, shell profile advisory, or `keel install --link`) and print the resolved binary path so the user can verify PATH setup.

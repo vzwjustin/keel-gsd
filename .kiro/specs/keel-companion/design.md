@@ -848,12 +848,329 @@ keel done               # → exit 0
 - `keel drift` cold start: reads 1 checkpoint file + current file mtimes; target < 200ms
 - `keel done` cold start: reads heartbeat + alerts + checkpoint; target < 100ms
 
+## GSD Phase Lifecycle Integration
+
+### Overview
+
+GSD fully orchestrates the keel companion lifecycle. The companion starts automatically when GSD phases begin and stops when they end. Users never invoke keel directly during normal GSD operation.
+
+### Phase Start Sequence
+
+When a GSD phase begins (via `execute-phase` or equivalent):
+
+```
+1. GSD_Init returns JSON context including keel_installed: bool
+2. IF keel_installed == true:
+   a. Invoke: keel companion start  (fire-and-forget, stdout+stderr → /dev/null)
+   b. Invoke: keel checkpoint        (anchor phase start state)
+3. Continue with phase work
+```
+
+`keel companion start` is idempotent — if the companion is already running, it exits 0 without disruption. GSD workflows never check `keel companion status` before calling start; the idempotency guarantee makes the status check unnecessary and avoids latency.
+
+### Phase End Sequence
+
+When a GSD phase ends (via `verify-work` or equivalent):
+
+```
+1. IF keel_installed == true:
+   a. Invoke: keel done              (done-gate check)
+   b. IF keel done exits non-zero:
+      - Surface blocker message to agent
+      - Halt phase completion
+      - Print resolution command (keel advance or keel checkpoint)
+   c. IF keel done exits 0:
+      - Invoke: keel companion stop  (fire-and-forget, stdout+stderr → /dev/null)
+2. Continue with phase completion
+```
+
+### Silent Invocation Contract
+
+All GSD workflow keel invocations redirect stdout and stderr to `/dev/null` unless the output is explicitly consumed (e.g., `keel done` blocker messages, `keel drift --json` output). This ensures keel never produces visible noise during normal GSD operation.
+
+```bash
+# Pattern for fire-and-forget keel calls in GSD workflows
+keel companion start 2>/dev/null
+keel checkpoint 2>/dev/null
+
+# Pattern for consumed output
+DRIFT_JSON=$(keel drift --json 2>/dev/null)
+```
+
+### Milestone Completion Blocking
+
+When `complete-milestone` is invoked:
+
+```
+1. IF keel_installed == true AND .keel/session/alerts.yaml exists:
+   a. Read alerts.yaml
+   b. IF any alert has severity: high AND deterministic: true:
+      - Invoke: keel done
+      - IF keel done exits non-zero: block milestone completion, surface blockers
+2. Continue with milestone completion
+```
+
+If `.keel/session/alerts.yaml` does not exist or is empty, the drift gate is treated as passed.
+
+### Fallback When Binary Is Absent
+
+If `command -v keel` fails at any GSD phase hook invocation point, the entire keel block is skipped silently. The `keel_installed` field from `GSD_Init` is the single gate — GSD workflows check this field once rather than re-running `command -v keel` inline.
+
+
+## Drift Data Feedback into GSD Context
+
+### KEEL-STATUS.md Refresh Contract
+
+The companion refreshes `.planning/KEEL-STATUS.md` whenever alert state changes during a watch cycle. This keeps the file current for GSD agents reading `.planning/` context.
+
+Refresh triggers:
+- Any new alert written to `alerts.yaml`
+- Any alert cleared from `alerts.yaml`
+- `keel companion start` (initial write, before first watch cycle)
+- Any state-changing keel command (`keel checkpoint`, `keel advance`, `keel goal`, `keel scan`)
+
+The file is skipped silently if `.planning/` does not exist.
+
+### High-Severity Warning Section
+
+When KEEL-STATUS.md is written and one or more `severity: high` alerts are active, the file includes a `## ⚠ Drift Warning` section:
+
+```markdown
+## ⚠ Drift Warning
+
+The following blockers must be resolved before phase completion:
+
+- SCOPE-001: File hooks/new-feature.js is outside active plan scope
+  Resolution: run `keel advance` to acknowledge or revert the file
+
+- VAL-004: Unresolved questions detected
+  Resolution: resolve questions in unresolved-questions.yaml
+```
+
+### Drift Report JSON Persistence
+
+`keel drift --json` writes its output to two destinations simultaneously:
+1. stdout (for direct consumption by calling scripts)
+2. `.keel/session/drift-report.json` (for GSD hooks to read without re-invoking keel)
+
+This allows GSD hooks to read the last drift report without spawning a subprocess.
+
+### GSD_Init Context Enrichment
+
+When `GSD_Init` is called with `keel_installed: true`, the response includes:
+
+```json
+{
+  "keel_installed": true,
+  "keel_status": {
+    "running": true,
+    "pid": 12345,
+    "last_beat_at": "2025-01-15T10:30:00.000Z",
+    "stale": false
+  }
+}
+```
+
+`keel_status` is `null` if the heartbeat file is absent. This gives GSD workflows heartbeat state without a separate file read.
+
+### Context Freshness Gate
+
+GSD workflows include KEEL-STATUS.md in agent context only when:
+- The file exists at `.planning/KEEL-STATUS.md`
+- The `Last updated` timestamp is within 60 seconds of the current time
+
+If the file is absent or stale, the workflow proceeds without KEEL context and surfaces no error to the agent.
+
+
+## Git Event Integration
+
+### Git Hook Installation
+
+`keel install` installs two git hooks into `.git/hooks/`:
+
+**`.git/hooks/post-checkout`**:
+```bash
+#!/bin/sh
+# keel git integration — post-checkout
+keel git-event branch-switch "$1" "$2" "$3" 2>/dev/null || true
+```
+
+**`.git/hooks/post-commit`**:
+```bash
+#!/bin/sh
+# keel git integration — post-commit
+keel git-event commit 2>/dev/null || true
+```
+
+Both hooks exit 0 unconditionally (via `|| true`) so a keel failure never blocks git operations. If `.git/` does not exist, `keel install` skips hook installation silently.
+
+### Branch Switch Handling
+
+When a `post-checkout` event fires (branch switch, not file checkout):
+
+```
+ALGORITHM handleBranchSwitch(prevHead, newHead, isBranchSwitch)
+BEGIN
+  IF NOT isBranchSwitch THEN RETURN END IF  // file checkout, not branch switch
+
+  newBranch ← getCurrentBranch()
+  activePhase ← loadLatestCheckpoint().phase  // e.g., "3.1"
+
+  IF newBranch CONTAINS activePhase THEN
+    // Branch matches active phase — clean context switch
+    clearAlertsWithRule("GIT-001")
+    writeCheckpoint(cwd, { ...currentState, branch: newBranch })
+    writeKeelStatus(cwd)
+  ELSE
+    // Branch does not match — potential context mismatch
+    writeAlert({
+      rule: "GIT-001",
+      message: "Branch switched to '" + newBranch + "' — verify this matches active phase " + activePhase,
+      severity: "medium",
+      deterministic: false,
+      cluster_id: "git-" + Date.now()
+    })
+    writeKeelStatus(cwd)
+  END IF
+END
+```
+
+### Commit Auto-Checkpoint
+
+When a `post-commit` event fires and the companion is running:
+
+```
+ALGORITHM handleCommit()
+BEGIN
+  IF NOT companionIsRunning() THEN RETURN END IF
+  writeCheckpoint(cwd, { ...currentState, git_commit: getHeadCommitHash() })
+  writeKeelStatus(cwd)
+END
+```
+
+This anchors the committed state as the new drift baseline, preventing false positives for files that were intentionally committed.
+
+### Git Rule Definition
+
+| Rule ID | Trigger | Severity | Deterministic |
+|---------|---------|----------|---------------|
+| GIT-001 | Branch switch to a branch not matching the active GSD phase identifier | medium | false |
+
+GIT-001 is non-deterministic (does not block `keel done`) because branch switches may be intentional workflow steps.
+
+### Drift Report Branch Context
+
+`keel drift` always includes branch context in its output:
+
+```
+Branch at checkpoint: feature/phase-3.1-keel-companion
+Current branch:       feature/phase-3.1-keel-companion
+Branch status:        ✓ matches checkpoint
+```
+
+When branches differ:
+```
+Branch at checkpoint: feature/phase-3.1-keel-companion
+Current branch:       main
+Branch status:        ⚠ context mismatch — run keel checkpoint to re-anchor
+```
+
+The `keel drift --json` output includes:
+```json
+{
+  "drifted": true,
+  "alerts": [...],
+  "blockers": [...],
+  "branch": {
+    "at_checkpoint": "feature/phase-3.1-keel-companion",
+    "current": "main",
+    "mismatch": true
+  }
+}
+```
+
+
+## Claude Code CLI Compatibility
+
+### Daemon Fork Requirements
+
+The daemon fork uses `child_process.spawn` with specific options to ensure compatibility with Claude Code's execution environment:
+
+```javascript
+const child = spawn(process.execPath, [keelBinPath, '--daemon'], {
+  detached: true,
+  stdio: 'ignore',   // do not inherit Claude Code's stdio handles
+  cwd: cwd,
+  env: process.env
+})
+child.unref()        // parent exits immediately; daemon runs independently
+```
+
+This ensures:
+- The daemon does not inherit Claude Code's stdio file descriptors
+- The daemon survives the parent process (Claude Code agent) exiting
+- The daemon continues running if Claude Code is interrupted or killed
+
+### PATH Resolution for Claude Code
+
+`keel install --link` creates a symlink at `/usr/local/bin/keel` (fallback: `~/bin/keel`) and prints the resolved path:
+
+```
+✓ keel linked: /usr/local/bin/keel → /path/to/repo/keel/bin/keel.js
+  Add to PATH if not already present: export PATH="/usr/local/bin:$PATH"
+```
+
+This allows Claude Code workflows to resolve `keel` via PATH without project-relative path assumptions.
+
+### Statusline Hook Compatibility
+
+`gsd-statusline.js` reads `.keel/session/companion-heartbeat.yaml` directly from disk rather than invoking `keel companion status`. This avoids PATH resolution failures in the hook's execution context within Claude Code terminals.
+
+```javascript
+// Correct: direct file read (no subprocess)
+const heartbeat = readHeartbeatFile(cwd)
+
+// Incorrect: subprocess invocation (PATH may not resolve in hook context)
+// const result = execSync('keel companion status')
+```
+
+### GSD_Init Binary Detection
+
+`init.cjs` detects keel via `which keel` (binary presence), not `.keel/` directory presence:
+
+```javascript
+function detectKeel(cwd) {
+  try {
+    execSync('which keel', { stdio: 'ignore' })
+    return { keel_installed: true }
+  } catch {
+    return { keel_installed: false }
+  }
+}
+```
+
+`keel_installed: false` is returned when the binary is absent regardless of `.keel/` directory state. This is accurate in all Claude Code working directory contexts.
+
+### Fire-and-Forget Invocation Pattern
+
+GSD workflows running in Claude Code invoke keel as fire-and-forget bash commands, not blocking subprocesses:
+
+```bash
+# Fire-and-forget: exit code is the only signal consumed
+keel companion start 2>/dev/null
+echo $?  # 0 = success, non-zero = failure
+```
+
+The workflow never waits for confirmation output from keel — exit code 0 is the complete success signal.
+
+
 ## Security Considerations
 
 - The daemon runs as the same user who invoked `keel companion start` — no privilege escalation
 - State files in `.keel/session/` should be added to `.gitignore` (written by `keel init`)
 - `keel.yaml` config does not accept shell commands or eval-able content — all values are data
 - The YAML parser (`yaml.js`) does not execute arbitrary code; it handles only the known schema shapes
+- Git hook scripts installed by `keel install` contain only static keel invocations — no user-controlled content is interpolated into hook scripts
 
 ## Dependencies
 
