@@ -1,0 +1,14 @@
+version: 1.0.0
+initialized_at: "2026-03-25T23:17:50.447Z"
+watch:
+  debounce_ms: 500
+  ignore_patterns:
+    - .git/**
+    - node_modules/**
+    - .keel/**
+alerts:
+  consolidation_window_ms: 10000
+  stale_heartbeat_threshold_ms: 30000
+done_gate:
+  require_fresh_heartbeat: true
+  block_on_high_severity: true

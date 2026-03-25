@@ -33,9 +33,12 @@ Parse JSON for: `state_exists`, `roadmap_exists`, `project_exists`, `planning_ex
 **KEEL companion restart (fire-and-forget):**
 ```bash
 # Gate on keel_installed from init JSON — single field check, no inline binary detection (Req 10.1, 10.4).
-# keel companion start is idempotent — no need to check status first.
 if [ "$keel_installed" = "true" ]; then
-  keel companion start 2>/dev/null
+  if [ ! -d ".keel" ]; then
+    keel install 2>/dev/null
+  else
+    keel companion start 2>/dev/null
+  fi
 fi
 ```
 

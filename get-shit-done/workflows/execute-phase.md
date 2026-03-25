@@ -166,10 +166,15 @@ This updates Status, Last Activity, Current focus, Current Position, and plan co
 **KEEL guardrail (fire-and-forget, gated by `keel_installed` from GSD_Init):**
 ```bash
 # Gate on keel_installed from init JSON — single field check, no inline binary detection.
-# keel companion start is idempotent — no need to check status first.
+# If .keel/ doesn't exist yet, bootstrap with keel install (which starts companion + checkpoint).
+# If .keel/ already exists, just start companion (idempotent) and take a checkpoint.
 if [ "$keel_installed" = "true" ]; then
-  keel companion start 2>/dev/null
-  keel checkpoint 2>/dev/null
+  if [ ! -d ".keel" ]; then
+    keel install 2>/dev/null
+  else
+    keel companion start 2>/dev/null
+    keel checkpoint 2>/dev/null
+  fi
 fi
 ```
 

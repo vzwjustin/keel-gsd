@@ -1,0 +1,22 @@
+scanned_at: "2026-03-25T23:17:50.469Z"
+root: .
+in_scope:
+  - pattern: .keel/**
+    reason: keel_state
+  - pattern: .kiro/**
+    reason: related_component
+  - pattern: commands/**
+    reason: related_component
+  - pattern: get-shit-done/**
+    reason: related_component
+  - pattern: hooks/**
+    reason: related_component
+  - pattern: keel/**
+    reason: related_component
+  - pattern: tests/**
+    reason: related_component
+out_of_scope:
+  - pattern: docs/**
+  - pattern: assets/**
+  - pattern: node_modules/**
+  - pattern: .git/**

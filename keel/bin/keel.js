@@ -567,7 +567,7 @@ async function runInstall(flags) {
       scan().readGoal(cwd);
     } catch { /* non-fatal if no ROADMAP.md */ }
 
-    // 5. Run checkpoint
+    // 5. Run checkpoint — read scope.yaml written by scan to populate scope
     try {
       const goalPath = path.join(cwd, '.keel', 'goal.yaml');
       let goalData = null;
@@ -576,12 +576,33 @@ async function runInstall(flags) {
         if (text) goalData = yaml().parseYaml(text);
       } catch { /* absent */ }
 
+      const scopePath = path.join(cwd, '.keel', 'scope.yaml');
+      let scopeData = null;
+      try {
+        const text = fs.readFileSync(scopePath, 'utf8').trim();
+        if (text) scopeData = yaml().parseYaml(text);
+      } catch { /* absent */ }
+
+      const inScopeFiles = [];
+      const inScopeDirs = [];
+      if (scopeData && Array.isArray(scopeData.in_scope)) {
+        for (const entry of scopeData.in_scope) {
+          const pattern = entry.pattern || '';
+          if (pattern.endsWith('/**')) {
+            inScopeDirs.push(pattern.slice(0, -3));
+          } else {
+            inScopeFiles.push(pattern);
+          }
+        }
+      }
+
       checkpoint().writeCheckpoint(cwd, {
         goal: (goalData && goalData.goal) || null,
         phase: (goalData && goalData.phase) || null,
-        in_scope_files: [],
-        in_scope_dirs: [],
+        in_scope_files: inScopeFiles,
+        in_scope_dirs: inScopeDirs,
         plan_steps: [],
+        branch: alerts().getCurrentBranch(cwd),
       });
     } catch { /* non-fatal */ }
 

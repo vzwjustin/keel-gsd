@@ -23,9 +23,12 @@ keel_installed="false"
 if command -v keel >/dev/null 2>&1; then keel_installed="true"; fi
 
 # Gate on keel_installed — single field check, no inline binary detection (Req 10.1, 10.4).
-# keel companion start is idempotent — no need to check status first.
 if [ "$keel_installed" = "true" ]; then
-  keel companion start 2>/dev/null
+  if [ ! -d ".keel" ]; then
+    keel install 2>/dev/null
+  else
+    keel companion start 2>/dev/null
+  fi
 fi
 ```
 
